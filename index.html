@@ -50,6 +50,19 @@
             <canvas id="pool-table" width="1000" height="590" aria-label="Nine-ball pool table. Aim with your pointer; a dashed line previews cue contact and a lime line previews the target ball’s path. Pull back and release to shoot."></canvas>
             <div class="canvas-message" id="canvas-message" aria-live="polite"></div>
           </div>
+          <section class="mobile-shot-controls" id="mobile-shot-controls" aria-label="Touch shot controls" hidden>
+            <div class="aim-pad" role="group" aria-label="Aim direction">
+              <button type="button" data-aim-x="0" data-aim-y="-1" aria-label="Aim up">↑</button>
+              <button type="button" data-aim-x="-1" data-aim-y="0" aria-label="Aim left">←</button>
+              <button type="button" data-aim-x="0" data-aim-y="1" aria-label="Aim down">↓</button>
+              <button type="button" data-aim-x="1" data-aim-y="0" aria-label="Aim right">→</button>
+            </div>
+            <label class="mobile-power-control" for="mobile-power">
+              <span>POWER <output id="mobile-power-value" for="mobile-power">40%</output></span>
+              <input id="mobile-power" type="range" min="1" max="150" value="60" aria-label="Shot power">
+            </label>
+            <button class="mobile-shoot-button" id="mobile-shoot" type="button">SHOOT</button>
+          </section>
           <div class="table-foot">
             <div class="mode-switch" role="group" aria-label="Game mode">
               <button type="button" class="mode-button active" data-mode="pvp" aria-pressed="true"><span class="mode-icon">↔</span> 1 vs 1</button>
@@ -173,7 +186,7 @@
 
           <section class="how-to">
             <div class="how-to-title"><span class="cue-glyph">↗</span><span id="help-heading">THE SHOT</span></div>
-            <p id="help-copy">Aim with your pointer or touch toward the target. White marks contact and cushion bounces, teal shows cue deflection, lime shows the object-ball path. Hold, pull back, release.</p>
+            <p id="help-copy">Aim with your pointer. On touch devices, use the direction buttons, power slider, and Shoot button below the table. White marks contact and cushion bounces, teal shows cue deflection, lime shows the object-ball path.</p>
             <div class="power-meter"><div class="power-fill" id="power-fill"></div></div>
             <div class="power-label"><span>POWER</span><span id="power-value">0%</span></div>
           </section>

@@ -38,6 +38,9 @@
     trick: ["Trick shot", "Arrange the balls anywhere, then shoot. Pocket balls any way you like."]
   };
   const difficultyNames = { 1: "Rookie", 2: "Club player", 3: "Pro" };
+  function hasTouchControls() {
+    return window.matchMedia("(pointer: coarse)").matches || navigator.maxTouchPoints > 0 || window.innerWidth <= 780;
+  }
   const els = {
     modeButtons: [...document.querySelectorAll(".mode-button")],
     modeTitle: document.getElementById("mode-title"),
@@ -65,6 +68,11 @@
     helpCopy: document.getElementById("help-copy"),
     powerFill: document.getElementById("power-fill"),
     powerValue: document.getElementById("power-value"),
+    mobileShotControls: document.getElementById("mobile-shot-controls"),
+    mobilePower: document.getElementById("mobile-power"),
+    mobilePowerValue: document.getElementById("mobile-power-value"),
+    mobileShoot: document.getElementById("mobile-shoot"),
+    aimButtons: [...document.querySelectorAll("[data-aim-x][data-aim-y]")],
     pushOutControls: document.getElementById("pushout-controls"),
     pushOutMessage: document.getElementById("pushout-message"),
     callPushOut: document.getElementById("call-pushout"),
@@ -253,8 +261,8 @@
     els.playerTwoToken.textContent = mode === "ai" ? "CPU" : "02";
     els.helpHeading.textContent = mode === "trick" ? "FREE PLAY" : mode === "timer" ? "RACE THE CLOCK" : "THE SHOT";
     els.helpCopy.textContent = mode === "trick"
-      ? "Drag balls to place them. On touch devices, drag on open table to aim, then pull the cue stick back and release to shoot."
-      : "Aim with your pointer or touch toward the target. On touch devices, drag on the table to aim, then drag the cue stick back and release to shoot. White marks contact and cushion bounces, teal shows cue deflection, lime shows the object-ball path.";
+      ? "Drag balls to place them. On touch devices, use the direction buttons, power slider, and Shoot button below the table."
+      : "Aim with your pointer. On touch devices, use the direction buttons, power slider, and Shoot button below the table. White marks contact and cushion bounces, teal shows cue deflection, lime shows the object-ball path.";
     remainingSeconds = selectedMinutes() * 60;
     resetGame();
   }
@@ -307,6 +315,14 @@
     } else if (canCallPushOut) {
       els.pushOutMessage.textContent = "After the break, you may call a push-out instead of a regular shot.";
     }
+    els.mobileShotControls.hidden = !hasTouchControls();
+    const canTakeShot = cueBall.active && !ballInHand && !moving && !gameOver
+      && !pushOutAwaitingChoice && (mode !== "ai" || currentPlayer === 0);
+    els.aimButtons.forEach((button) => {
+      button.disabled = !canTakeShot;
+    });
+    els.mobilePower.disabled = !canTakeShot;
+    els.mobileShoot.disabled = !canTakeShot;
     updateTimerDisplay();
   }
 
@@ -427,6 +443,12 @@
     const offsetX = point.x - cueBall.x;
     const offsetY = point.y - cueBall.y;
     if (Math.hypot(offsetX, offsetY) > 1) aimAngle = Math.atan2(offsetY, offsetX);
+  }
+
+  function adjustAim(x, y) {
+    const directionX = Math.cos(aimAngle) + x * .035;
+    const directionY = Math.sin(aimAngle) + y * .035;
+    aimAngle = Math.atan2(directionY, directionX);
   }
 
   function isTouchOnCueStick(point) {
@@ -1897,7 +1919,22 @@
   canvas.addEventListener("pointerup", onPointerUp);
   canvas.addEventListener("pointercancel", cancelPointerInteraction);
   canvas.addEventListener("lostpointercapture", cancelPointerInteraction);
+  canvas.addEventListener("dragstart", (event) => event.preventDefault());
   canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+  window.addEventListener("resize", updateUI);
+  els.aimButtons.forEach((button) => button.addEventListener("click", () => {
+    if (button.disabled) return;
+    adjustAim(Number(button.dataset.aimX), Number(button.dataset.aimY));
+  }));
+  els.mobilePower.addEventListener("input", () => {
+    const percent = Math.round(Number(els.mobilePower.value) / MAX_PULL * 100);
+    els.mobilePowerValue.value = `${percent}%`;
+    els.mobilePowerValue.textContent = `${percent}%`;
+  });
+  els.mobileShoot.addEventListener("click", () => {
+    if (els.mobileShoot.disabled) return;
+    shoot(Number(els.mobilePower.value), aimAngle);
+  });
   els.modeButtons.forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
   document.getElementById("reset-button").addEventListener("click", resetGame);
   document.getElementById("new-rack-button").addEventListener("click", resetGame);
