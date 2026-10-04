@@ -96,6 +96,7 @@
   let aimAngle = 0;
   let aimFromPull = false;
   let draggingCue = false;
+  let touchAiming = false;
   let pullDistance = 0;
   let pullStart = { x: 0, y: 0 };
   let moving = false;
@@ -214,6 +215,7 @@
     pocketedThisShot = [];
     shotTargetNumbers = [];
     draggingCue = false;
+    touchAiming = false;
     canvas.closest(".table-frame").classList.remove("is-pulling");
     draggedBall = null;
     pullDistance = 0;
@@ -251,8 +253,8 @@
     els.playerTwoToken.textContent = mode === "ai" ? "CPU" : "02";
     els.helpHeading.textContent = mode === "trick" ? "FREE PLAY" : mode === "timer" ? "RACE THE CLOCK" : "THE SHOT";
     els.helpCopy.textContent = mode === "trick"
-      ? "Drag balls to place them. Press and hold to lock aim, pull back up to 150px, then release."
-      : "Aim with your pointer or touch toward the target. White marks contact and cushion bounces, teal shows cue deflection, lime shows the object-ball path. Hold, pull back, release.";
+      ? "Drag balls to place them. On touch devices, drag on open table to aim, then pull the cue stick back and release to shoot."
+      : "Aim with your pointer or touch toward the target. On touch devices, drag on the table to aim, then drag the cue stick back and release to shoot. White marks contact and cushion bounces, teal shows cue deflection, lime shows the object-ball path.";
     remainingSeconds = selectedMinutes() * 60;
     resetGame();
   }
@@ -372,6 +374,12 @@
       }
     }
     if (!cueBall.active) return;
+    if (event.pointerType === "touch" && !isTouchOnCueStick(point)) {
+      touchAiming = true;
+      setAimFromPoint(point);
+      canvas.setPointerCapture(event.pointerId);
+      return;
+    }
     aimFromPull = Math.hypot(point.x - cueBall.x, point.y - cueBall.y) <= BALL_R + 5;
     if (!aimFromPull) setAimFromPoint(point);
     canvas.setPointerCapture(event.pointerId);
@@ -386,6 +394,10 @@
 
   function onPointerMove(event) {
     const point = canvasPoint(event);
+    if (touchAiming) {
+      setAimFromPoint(point);
+      return;
+    }
     if (ballInHand) {
       placementPoint = point;
       return;
@@ -417,6 +429,16 @@
     if (Math.hypot(offsetX, offsetY) > 1) aimAngle = Math.atan2(offsetY, offsetX);
   }
 
+  function isTouchOnCueStick(point) {
+    const directionX = Math.cos(aimAngle);
+    const directionY = Math.sin(aimAngle);
+    const offsetX = cueBall.x - point.x;
+    const offsetY = cueBall.y - point.y;
+    const alongStick = offsetX * directionX + offsetY * directionY;
+    const acrossStick = Math.abs(offsetX * directionY - offsetY * directionX);
+    return alongStick >= 8 && alongStick <= 184 && acrossStick <= 34;
+  }
+
   function onPointerUp() {
     if (draggedBall) {
       const pocket = pockets.find((candidate) => Math.hypot(draggedBall.x - candidate.x, draggedBall.y - candidate.y) < candidate.radius + 8);
@@ -431,6 +453,10 @@
       updateUI();
       return;
     }
+    if (touchAiming) {
+      touchAiming = false;
+      return;
+    }
     if (!draggingCue) return;
     draggingCue = false;
     aimFromPull = false;
@@ -443,6 +469,7 @@
 
   function cancelPointerInteraction() {
     draggedBall = null;
+    touchAiming = false;
     draggingCue = false;
     aimFromPull = false;
     pullDistance = 0;
