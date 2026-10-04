@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101713">
+    <title>Breakline — Nine Ball</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#" aria-label="Breakline home">
+          <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+          <span>BREAKLINE</span>
+        </a>
+        <div class="topbar-note"><span class="live-dot"></span> <span id="room-name">THE NINE-BALL ROOM</span></div>
+        <button class="icon-button" id="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6l-5 4H4Zm12-1a5 5 0 0 1 0 6m2-9a8 8 0 0 1 0 12"/></svg>
+        </button>
+      </header>
+
+      <section class="intro">
+        <div>
+          <p class="eyebrow">THE TABLE IS YOURS</p>
+          <h1>Make your <span>break.</span></h1>
+        </div>
+        <p class="intro-copy">A little patience. A little feel.<br>Let the table do the talking.</p>
+      </section>
+
+      <section class="game-layout" aria-label="Pool game">
+        <div class="table-column">
+          <div class="table-topline">
+            <div class="game-status">
+              <span class="status-pill"><span class="status-dot"></span><span id="status-label">YOUR TURN</span></span>
+              <span class="status-detail" id="status-detail">Call your shot</span>
+            </div>
+            <div class="table-tools">
+              <span class="table-number">TABLE 01</span>
+              <button class="reset-button" id="reset-button" type="button" aria-label="Reset game">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-14.9-3L3 11m0-6v6h6m-5 2a8.1 8.1 0 0 0 14.9 3L21 13m0 6v-6h-6"/></svg>
+                <span>NEW GAME</span>
+              </button>
+            </div>
+          </div>
+          <div class="table-frame">
+            <canvas id="pool-table" width="1000" height="590" aria-label="Nine-ball pool table. Aim with your pointer; a dashed line previews cue contact and a lime line previews the target ball’s path. Pull back and release to shoot."></canvas>
+            <div class="canvas-message" id="canvas-message" aria-live="polite"></div>
+          </div>
+          <div class="table-foot">
+            <div class="mode-switch" role="group" aria-label="Game mode">
+              <button type="button" class="mode-button active" data-mode="pvp" aria-pressed="true"><span class="mode-icon">↔</span> 1 vs 1</button>
+              <button type="button" class="mode-button" data-mode="ai" aria-pressed="false"><span class="mode-icon">◉</span> vs CPU</button>
+              <button type="button" class="mode-button" data-mode="timer" aria-pressed="false"><span class="mode-icon">◷</span> Time trial</button>
+              <button type="button" class="mode-button" data-mode="trick" aria-pressed="false"><span class="mode-icon">✳</span> Trick shot</button>
+            </div>
+            <div class="table-caption"><span id="caption-variant">9-BALL</span> <span>·</span> RACK ’EM UP</div>
+          </div>
+        </div>
+
+        <aside class="side-panel">
+          <section class="panel-section mode-panel">
+            <div class="section-heading">
+              <div><p class="eyebrow">PLAY YOUR WAY</p><h2 id="mode-title">Head to head</h2></div>
+              <span class="section-index">01</span>
+            </div>
+            <p class="mode-description" id="mode-description">Take turns with a friend. Lowest ball first — sink the 9 to win.</p>
+            <div class="timer-settings" id="variant-settings">
+              <label for="variant-select">GAME</label>
+              <div class="timer-controls">
+                <select id="variant-select" aria-label="Choose game type">
+                  <option value="nine" selected>9-ball</option>
+                  <option value="eight">8-ball</option>
+                </select>
+              </div>
+            </div>
+            <div class="timer-settings" id="aim-settings">
+              <label for="aim-select">AIM GUIDE</label>
+              <div class="timer-controls">
+                <select id="aim-select" aria-label="Show or hide the aim guide">
+                  <option value="on" selected>On</option>
+                  <option value="off">Off</option>
+                </select>
+              </div>
+            </div>
+            <div class="timer-settings" id="ai-settings" hidden>
+              <label for="difficulty-select">CPU DIFFICULTY</label>
+              <div class="timer-controls">
+                <select id="difficulty-select" aria-label="Choose CPU difficulty">
+                  <option value="1" selected>Rookie</option>
+                  <option value="2">Club player</option>
+                  <option value="3">Pro</option>
+                </select>
+              </div>
+            </div>
+            <div class="timer-settings" id="timer-settings" hidden>
+              <label for="time-select">TIME LIMIT</label>
+              <div class="timer-controls">
+                <select id="time-select" aria-label="Choose time limit">
+                  <option value="2">2 minutes</option>
+                  <option value="5" selected>5 minutes</option>
+                  <option value="10">10 minutes</option>
+                  <option value="15">15 minutes</option>
+                  <option value="custom">Custom</option>
+                </select>
+                <input id="custom-time" type="number" min="1" max="180" value="3" aria-label="Custom time in minutes" hidden>
+                <span class="minutes-label" id="minutes-label">MIN</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="scoreboard" aria-label="Score">
+            <div class="scoreboard-heading"><span>MATCH SCORE</span><span class="score-match">RACK 01</span></div>
+            <div class="player-row active-player" id="player-one">
+              <div class="player-token token-one">01</div>
+              <div class="player-info"><strong id="player-one-name">PLAYER ONE</strong><span id="player-one-state">AT THE TABLE</span></div>
+              <strong class="player-score" id="score-one">0</strong>
+            </div>
+            <div class="player-row" id="player-two">
+              <div class="player-token token-two" id="player-two-token">02</div>
+              <div class="player-info"><strong id="player-two-name">PLAYER TWO</strong><span id="player-two-state">ON DECK</span></div>
+              <strong class="player-score" id="score-two">0</strong>
+            </div>
+            <div class="timer-display" id="timer-display" hidden>
+              <span>TIME REMAINING</span><strong id="timer-value">05:00</strong>
+            </div>
+          </section>
+
+          <section class="balls-section">
+            <div class="section-heading balls-heading">
+              <div><p class="eyebrow">ON THE TABLE</p><h2>Ball tracker</h2></div>
+              <span class="balls-count" id="balls-count">9 <small>LEFT</small></span>
+            </div>
+            <div class="ball-tracker" id="ball-tracker" aria-label="Balls remaining"></div>
+          </section>
+
+          <section class="pushout-controls" id="pushout-controls" hidden aria-live="polite">
+            <p id="pushout-message"></p>
+            <button class="pushout-button" id="call-pushout" type="button">Call push-out</button>
+            <div id="pushout-response" hidden>
+              <button class="pushout-button" id="accept-pushout" type="button">Take the shot</button>
+              <button class="pushout-button secondary" id="pass-pushout" type="button">Make them shoot</button>
+            </div>
+          </section>
+
+          <details class="rules-section" id="rules-eight" hidden>
+            <summary>8-BALL RULES</summary>
+            <ol>
+              <li>The table is open after the break. The first ball legally pocketed on a regular shot assigns that player solids (1–7) or stripes (9–15).</li>
+              <li>Each shot, hit one of your own balls first (any non-8 ball while the table is open), then pocket a ball or drive a ball to a rail.</li>
+              <li>Pocket one of your own balls to keep shooting; otherwise play passes.</li>
+              <li>A foul is a scratch, hitting the wrong ball first, or no ball pocketed and no rail after contact. The opponent gets ball-in-hand.</li>
+              <li>Once your group is cleared, shoot the 8. Pocket it legally to win.</li>
+              <li>Pocketing the 8 early, or fouling while pocketing it, loses the rack. An 8 pocketed on the break is re-spotted. No pockets are called.</li>
+            </ol>
+          </details>
+
+          <details class="rules-section" id="rules-nine">
+            <summary>9-BALL RULES</summary>
+            <ol>
+              <li>On every regular shot, hit the lowest-numbered ball first.</li>
+              <li>Pocket any ball legally to keep shooting. Pocket the 9 legally to win, even on a combination.</li>
+              <li>A foul is a scratch, hitting the wrong ball first, or failing to pocket a ball or drive any ball to a rail after contact.</li>
+              <li>After a foul, the opponent gets ball-in-hand anywhere on the table.</li>
+              <li>Three consecutive fouls by one player lose the rack.</li>
+              <li>After a legal break, the shooter may call one push-out. No hit or rail is required; the next player may take the shot or pass it back. Pocketed balls stay down, but a 9 pocketed on a push-out is spotted.</li>
+            </ol>
+            <a href="https://en.wikipedia.org/wiki/Nine-ball" target="_blank" rel="noreferrer">Rules summary source</a>
+          </details>
+
+          <section class="how-to">
+            <div class="how-to-title"><span class="cue-glyph">↗</span><span id="help-heading">THE SHOT</span></div>
+            <p id="help-copy">Aim with your pointer or touch toward the target. White marks contact and cushion bounces, teal shows cue deflection, lime shows the object-ball path. Hold, pull back, release.</p>
+            <div class="power-meter"><div class="power-fill" id="power-fill"></div></div>
+            <div class="power-label"><span>POWER</span><span id="power-value">0%</span></div>
+          </section>
+
+          <button class="new-rack-button" id="new-rack-button" type="button">
+            <span>Rack ’em again</span><span aria-hidden="true">↗</span>
+          </button>
+        </aside>
+      </section>
+
+      <footer class="footer">
+        <span>GOOD GAMES ARE BUILT ONE SHOT AT A TIME.</span>
+        <span>EST. AFTER THE BREAK <i>✳</i></span>
+      </footer>
+    </main>
+    <script src="game.js"></script>
+  </body>
+</html>
