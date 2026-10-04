@@ -50,6 +50,10 @@
             <canvas id="pool-table" width="1000" height="590" aria-label="Nine-ball pool table. Aim with your pointer; a dashed line previews cue contact and a lime line previews the target ball’s path. Pull back and release to shoot."></canvas>
             <div class="canvas-message" id="canvas-message" aria-live="polite"></div>
           </div>
+          <div class="control-toggles" role="group" aria-label="Show or hide controls">
+            <button type="button" id="toggle-shot-controls" aria-controls="mobile-shot-controls" aria-expanded="true" hidden>Shot controls</button>
+            <button type="button" id="toggle-spin-controls" aria-controls="spin-controls" aria-expanded="false">Cue ball spin</button>
+          </div>
           <section class="mobile-shot-controls" id="mobile-shot-controls" aria-label="Touch shot controls" hidden>
             <div class="aim-pad" role="group" aria-label="Aim direction">
               <button type="button" data-aim-x="0" data-aim-y="-1" aria-label="Aim up">↑</button>
@@ -62,6 +66,22 @@
               <input id="mobile-power" type="range" min="1" max="150" value="60" aria-label="Shot power">
             </label>
             <button class="mobile-shoot-button" id="mobile-shoot" type="button">SHOOT</button>
+          </section>
+          <section class="spin-controls" id="spin-controls" aria-label="Cue ball spin" hidden>
+            <div class="spin-controls-heading">
+              <strong>CUE BALL SPIN</strong>
+              <span>Center hit = no spin</span>
+            </div>
+            <label class="spin-slider" for="spin-english">
+              <span>ENGLISH <output id="spin-english-value" for="spin-english">CENTER</output></span>
+              <input id="spin-english" type="range" min="-100" max="100" value="0" aria-label="Left or right side spin">
+              <span class="spin-range-labels"><span>LEFT</span><span>RIGHT</span></span>
+            </label>
+            <label class="spin-slider" for="spin-follow">
+              <span>TOP / BACK <output id="spin-follow-value" for="spin-follow">CENTER</output></span>
+              <input id="spin-follow" type="range" min="-100" max="100" value="0" aria-label="Backspin or topspin">
+              <span class="spin-range-labels"><span>DRAW</span><span>FOLLOW</span></span>
+            </label>
           </section>
           <div class="table-foot">
             <div class="mode-switch" role="group" aria-label="Game mode">
@@ -186,7 +206,7 @@
 
           <section class="how-to">
             <div class="how-to-title"><span class="cue-glyph">↗</span><span id="help-heading">THE SHOT</span></div>
-            <p id="help-copy">Aim with your pointer. On touch devices, use the direction buttons, power slider, and Shoot button below the table. White marks contact and cushion bounces, teal shows cue deflection, lime shows the object-ball path.</p>
+            <p id="help-copy">Aim with the pointer or touch direction pad; set power and shoot with the touch controls. English and draw/follow spin change the cue ball after ball and cushion contact.</p>
             <div class="power-meter"><div class="power-fill" id="power-fill"></div></div>
             <div class="power-label"><span>POWER</span><span id="power-value">0%</span></div>
           </section>

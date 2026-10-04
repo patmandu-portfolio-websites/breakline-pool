@@ -72,6 +72,14 @@
     mobilePower: document.getElementById("mobile-power"),
     mobilePowerValue: document.getElementById("mobile-power-value"),
     mobileShoot: document.getElementById("mobile-shoot"),
+    toggleShotControls: document.getElementById("toggle-shot-controls"),
+    toggleSpinControls: document.getElementById("toggle-spin-controls"),
+    spinControls: document.getElementById("spin-controls"),
+    spinEnglish: document.getElementById("spin-english"),
+    spinEnglishValue: document.getElementById("spin-english-value"),
+    spinFollow: document.getElementById("spin-follow"),
+    spinFollowValue: document.getElementById("spin-follow-value"),
+    spinSliders: [...document.querySelectorAll(".spin-slider input")],
     aimButtons: [...document.querySelectorAll("[data-aim-x][data-aim-y]")],
     pushOutControls: document.getElementById("pushout-controls"),
     pushOutMessage: document.getElementById("pushout-message"),
@@ -105,6 +113,7 @@
   let aimFromPull = false;
   let draggingCue = false;
   let touchAiming = false;
+  let showShotControls = true;
   let pullDistance = 0;
   let pullStart = { x: 0, y: 0 };
   let moving = false;
@@ -159,7 +168,26 @@
   }
 
   function makeBall(number, x, y) {
-    return { number, x, y, vx: 0, vy: 0, active: true, trail: [] };
+    const ball = { number, x, y, vx: 0, vy: 0, spinX: 0, spinY: 0, spinAxisX: 1, spinAxisY: 0, active: true, trail: [], orient: [[1, 0, 0], [0, 1, 0], [0, 0, 1]] };
+    rotateOrient(ball, 0, 0, 1, Math.random() * Math.PI * 2);
+    rotateOrient(ball, 1, 0, 0, (Math.random() - .5) * 1.4);
+    rotateOrient(ball, 0, 1, 0, (Math.random() - .5) * 1.4);
+    return ball;
+  }
+
+  // Rotates the ball's local axes (world-space vectors) about a unit axis by angle (Rodrigues).
+  function rotateOrient(ball, kx, ky, kz, angle) {
+    if (!ball.orient || !angle) return;
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    ball.orient = ball.orient.map(([vx, vy, vz]) => {
+      const dot = kx * vx + ky * vy + kz * vz;
+      return [
+        vx * c + (ky * vz - kz * vy) * s + kx * dot * (1 - c),
+        vy * c + (kz * vx - kx * vz) * s + ky * dot * (1 - c),
+        vz * c + (kx * vy - ky * vx) * s + kz * dot * (1 - c)
+      ];
+    });
   }
 
   function isEightBall() {
@@ -261,8 +289,8 @@
     els.playerTwoToken.textContent = mode === "ai" ? "CPU" : "02";
     els.helpHeading.textContent = mode === "trick" ? "FREE PLAY" : mode === "timer" ? "RACE THE CLOCK" : "THE SHOT";
     els.helpCopy.textContent = mode === "trick"
-      ? "Drag balls to place them. On touch devices, use the direction buttons, power slider, and Shoot button below the table."
-      : "Aim with your pointer. On touch devices, use the direction buttons, power slider, and Shoot button below the table. White marks contact and cushion bounces, teal shows cue deflection, lime shows the object-ball path.";
+      ? "Drag balls to place them. On touch screens, use the direction pad, power slider, and Shoot button. Set English or draw/follow spin below the table."
+      : "Aim with the pointer or touch direction pad; set power and shoot with the touch controls. English and draw/follow spin change the cue ball after ball and cushion contact.";
     remainingSeconds = selectedMinutes() * 60;
     resetGame();
   }
@@ -315,14 +343,22 @@
     } else if (canCallPushOut) {
       els.pushOutMessage.textContent = "After the break, you may call a push-out instead of a regular shot.";
     }
-    els.mobileShotControls.hidden = !hasTouchControls();
+    const touchControls = hasTouchControls();
+    els.toggleShotControls.hidden = !touchControls;
+    els.mobileShotControls.hidden = !touchControls || !showShotControls;
     const canTakeShot = cueBall.active && !ballInHand && !moving && !gameOver
+      && !pushOutAwaitingChoice && (mode !== "ai" || currentPlayer === 0);
+    const canAdjustSpin = cueBall.active && !moving && !gameOver
       && !pushOutAwaitingChoice && (mode !== "ai" || currentPlayer === 0);
     els.aimButtons.forEach((button) => {
       button.disabled = !canTakeShot;
     });
     els.mobilePower.disabled = !canTakeShot;
     els.mobileShoot.disabled = !canTakeShot;
+    els.spinSliders.forEach((slider) => {
+      slider.disabled = !canAdjustSpin;
+    });
+    updateSpinReadouts();
     updateTimerDisplay();
   }
 
@@ -522,6 +558,8 @@
     cueBall.y = y;
     cueBall.vx = 0;
     cueBall.vy = 0;
+    cueBall.spinX = 0;
+    cueBall.spinY = 0;
     cueBall.active = true;
     ballInHand = false;
     turnNotice = "";
@@ -547,7 +585,22 @@
     els.powerValue.textContent = `${percent}%`;
   }
 
-  function shoot(power, angle) {
+  function updateSpinReadouts() {
+    const english = Number(els.spinEnglish.value);
+    const follow = Number(els.spinFollow.value);
+    const amount = (value, negative, positive) => Math.abs(value) < 5
+      ? "CENTER"
+      : `${value < 0 ? negative : positive} ${Math.abs(value)}%`;
+    els.spinEnglishValue.value = amount(english, "LEFT", "RIGHT");
+    els.spinEnglishValue.textContent = amount(english, "LEFT", "RIGHT");
+    els.spinFollowValue.value = amount(follow, "DRAW", "FOLLOW");
+    els.spinFollowValue.textContent = amount(follow, "DRAW", "FOLLOW");
+  }
+
+  function shoot(power, angle, spin = {
+    x: Number(els.spinEnglish.value) / 100,
+    y: Number(els.spinFollow.value) / 100
+  }) {
     turnNotice = "";
     shotTargetNumber = lowestBall()?.number ?? null;
     shotTargetNumbers = legalTargets(currentPlayer).map((ball) => ball.number);
@@ -563,6 +616,10 @@
     const speed = power * SHOT_SPEED_PER_PULL;
     cueBall.vx = Math.cos(angle) * speed;
     cueBall.vy = Math.sin(angle) * speed;
+    cueBall.spinX = spin.x;
+    cueBall.spinY = spin.y;
+    cueBall.spinAxisX = Math.cos(angle);
+    cueBall.spinAxisY = Math.sin(angle);
     moving = true;
     updateUI();
     playTone(115, .045, .025);
@@ -627,6 +684,13 @@
 
   function advanceBall(ball, dt) {
     const speed = Math.hypot(ball.vx, ball.vy);
+    const spinRetention = Math.exp(-.45 * dt);
+    ball.spinX *= spinRetention;
+    ball.spinY *= spinRetention;
+    if (ball.orient) {
+      rotateOrient(ball, 0, 0, 1, -ball.spinX * 4 * dt);
+      if (speed > 0) rotateOrient(ball, -ball.spinAxisY, ball.spinAxisX, 0, ball.spinY * 5 * dt);
+    }
     if (speed === 0) return;
     const directionX = ball.vx / speed;
     const directionY = ball.vy / speed;
@@ -634,6 +698,8 @@
     const distance = speed * travelTime - .5 * BALL_FRICTION * travelTime * travelTime;
     ball.x += directionX * distance;
     ball.y += directionY * distance;
+    // Rolling without slipping: rotate about the horizontal axis perpendicular to travel.
+    if (ball.orient) rotateOrient(ball, -directionY, directionX, 0, distance / BALL_R);
     const nextSpeed = Math.max(0, speed - BALL_FRICTION * dt);
     ball.vx = directionX * nextSpeed;
     ball.vy = directionY * nextSpeed;
@@ -649,30 +715,38 @@
     if (ball.x < left) {
       ball.x = left;
       if (ball.vx < 0) {
+        const impactSpeed = -ball.vx;
         ball.vx = -ball.vx * RAIL_RESTITUTION;
         ball.vy *= RAIL_TANGENTIAL_RETENTION;
+        applyCueSideSpin(ball, impactSpeed, 0, 1);
         hitRail = true;
       }
     } else if (ball.x > right) {
       ball.x = right;
       if (ball.vx > 0) {
+        const impactSpeed = ball.vx;
         ball.vx = -ball.vx * RAIL_RESTITUTION;
         ball.vy *= RAIL_TANGENTIAL_RETENTION;
+        applyCueSideSpin(ball, impactSpeed, 0, 1);
         hitRail = true;
       }
     }
     if (ball.y < top) {
       ball.y = top;
       if (ball.vy < 0) {
+        const impactSpeed = -ball.vy;
         ball.vy = -ball.vy * RAIL_RESTITUTION;
         ball.vx *= RAIL_TANGENTIAL_RETENTION;
+        applyCueSideSpin(ball, impactSpeed, 1, 0);
         hitRail = true;
       }
     } else if (ball.y > bottom) {
       ball.y = bottom;
       if (ball.vy > 0) {
+        const impactSpeed = ball.vy;
         ball.vy = -ball.vy * RAIL_RESTITUTION;
         ball.vx *= RAIL_TANGENTIAL_RETENTION;
+        applyCueSideSpin(ball, impactSpeed, 1, 0);
         hitRail = true;
       }
     }
@@ -680,6 +754,17 @@
       if (firstHitNumber !== null) railContactAfterFirstHit = true;
       playTone(85, .025, .012);
     }
+  }
+
+  function applyCueSideSpin(ball, impactSpeed, tangentX, tangentY) {
+    if (ball.number !== 0 || ball.spinX === 0) return;
+    const spinSideX = -ball.spinAxisY;
+    const spinSideY = ball.spinAxisX;
+    const alignment = spinSideX * tangentX + spinSideY * tangentY;
+    const sideVelocity = ball.spinX * impactSpeed * .18 * alignment;
+    ball.vx += tangentX * sideVelocity;
+    ball.vy += tangentY * sideVelocity;
+    ball.spinX *= .72;
   }
 
   function collide(a, b) {
@@ -707,10 +792,20 @@
       else if (b.number === 0 && a.number > 0) firstHitNumber = a.number;
     }
     const impulse = relativeVelocity * (1 + BALL_RESTITUTION) / 2;
+    const cueBallInCollision = a.number === 0 ? a : b.number === 0 ? b : null;
+    const incomingCueSpeed = cueBallInCollision ? Math.hypot(cueBallInCollision.vx, cueBallInCollision.vy) : 0;
+    const incomingCueDirectionX = incomingCueSpeed ? cueBallInCollision.vx / incomingCueSpeed : 0;
+    const incomingCueDirectionY = incomingCueSpeed ? cueBallInCollision.vy / incomingCueSpeed : 0;
     a.vx -= impulse * nx;
     a.vy -= impulse * ny;
     b.vx += impulse * nx;
     b.vy += impulse * ny;
+    if (cueBallInCollision?.spinY && incomingCueSpeed > 0) {
+      const followVelocity = cueBallInCollision.spinY * incomingCueSpeed * .34;
+      cueBallInCollision.vx += incomingCueDirectionX * followVelocity;
+      cueBallInCollision.vy += incomingCueDirectionY * followVelocity;
+      cueBallInCollision.spinY = 0;
+    }
     playTone(240, .035, .012);
   }
 
@@ -774,6 +869,8 @@
     cueBall.active = true;
     cueBall.vx = 0;
     cueBall.vy = 0;
+    cueBall.spinX = 0;
+    cueBall.spinY = 0;
     cueBall.x = 275;
     cueBall.y = H / 2;
     separateFromNeighbors(cueBall);
@@ -1009,7 +1106,7 @@
 
   function simulateShot(angle, power) {
     const saved = { balls, cueBall, firstHitNumber, railContactAfterFirstHit, soundOn };
-    const copy = balls.map((ball) => ({ ...ball, trail: [] }));
+    const copy = balls.map((ball) => ({ ...ball, trail: [], orient: null }));
     const pocketed = [];
     let result;
     try {
@@ -1020,6 +1117,8 @@
       soundOn = false;
       cueBall.vx = Math.cos(angle) * power * SHOT_SPEED_PER_PULL;
       cueBall.vy = Math.sin(angle) * power * SHOT_SPEED_PER_PULL;
+      cueBall.spinX = 0;
+      cueBall.spinY = 0;
       const step = 1 / 120;
       for (let tick = 0; tick < 1200; tick += 1) {
         const active = copy.filter((ball) => ball.active);
@@ -1446,7 +1545,7 @@
     aiTimeout = window.setTimeout(() => {
       if (mode !== "ai" || currentPlayer !== 1 || gameOver) return;
       turnNotice = "";
-      shoot(shot.power, shot.angle);
+      shoot(shot.power, shot.angle, { x: 0, y: 0 });
     }, 850);
   }
 
@@ -1508,6 +1607,7 @@
     const canAim = !gameOver && cueBall.active && !moving && !draggedBall && !ballInHand;
     if (canAim && aimGuideOn) drawAimGuide({ x: Math.cos(aimAngle), y: Math.sin(aimAngle) });
     drawBalls();
+    if (canAim && (Number(els.spinEnglish.value) !== 0 || Number(els.spinFollow.value) !== 0)) drawSpinMarker();
     const canPlaceCueBall = mode !== "ai" || currentPlayer === 0;
     if (ballInHand && canPlaceCueBall && placementPoint.x >= TABLE.left && placementPoint.x <= TABLE.right
       && placementPoint.y >= TABLE.top && placementPoint.y <= TABLE.bottom) {
@@ -1563,6 +1663,20 @@
     }
   }
 
+  function drawSpinMarker() {
+    const x = cueBall.x + Number(els.spinEnglish.value) / 100 * BALL_R * .58;
+    const y = cueBall.y - Number(els.spinFollow.value) / 100 * BALL_R * .58;
+    ctx.save();
+    ctx.fillStyle = "#8dca48";
+    ctx.strokeStyle = "rgba(17,27,19,.8)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(x, y, 2.8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function drawBall(ball) {
     const { x, y, number } = ball;
     ctx.save();
@@ -1583,34 +1697,71 @@
       ctx.beginPath();
       ctx.arc(x, y, BALL_R - .7, 0, Math.PI * 2);
       ctx.clip();
+      const orient = ball.orient || [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+      const [ex, ey, ez] = orient;
       const base = ctx.createLinearGradient(x - BALL_R, y - BALL_R, x + BALL_R, y + BALL_R);
       base.addColorStop(0, "#ffffff");
       base.addColorStop(1, "#b9beb1");
       ctx.fillStyle = base;
       ctx.fillRect(x - BALL_R, y - BALL_R, BALL_R * 2, BALL_R * 2);
+      ctx.fillStyle = colors[number];
+      ctx.strokeStyle = colors[number];
+      ctx.lineWidth = .6;
       if (number >= 9) {
-        ctx.fillStyle = colors[number];
-        ctx.fillRect(x - BALL_R, y - 6, BALL_R * 2, 12);
+        // Stripe is a band around the ball's local Y axis, projected from its current orientation.
+        const band = .46;
+        const segments = 32;
+        const point = (angle, lat) => {
+          const lx = Math.cos(angle) * Math.cos(lat);
+          const ly = Math.sin(lat);
+          const lz = Math.sin(angle) * Math.cos(lat);
+          return [
+            x + (lx * ex[0] + ly * ey[0] + lz * ez[0]) * BALL_R,
+            y + (lx * ex[1] + ly * ey[1] + lz * ez[1]) * BALL_R,
+            lx * ex[2] + ly * ey[2] + lz * ez[2]
+          ];
+        };
+        for (let i = 0; i < segments; i += 1) {
+          const a0 = (i / segments) * Math.PI * 2;
+          const a1 = ((i + 1) / segments) * Math.PI * 2;
+          const corners = [point(a0, -band), point(a1, -band), point(a1, band), point(a0, band)];
+          if (corners.reduce((sum, c) => sum + c[2], 0) / 4 < -.02) continue;
+          ctx.beginPath();
+          ctx.moveTo(corners[0][0], corners[0][1]);
+          for (let c = 1; c < 4; c += 1) ctx.lineTo(corners[c][0], corners[c][1]);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        }
       } else {
-        const ballGradient = ctx.createRadialGradient(x - 5, y - 6, 1, x, y, BALL_R + 3);
-        ballGradient.addColorStop(0, lighten(colors[number], .33));
-        ballGradient.addColorStop(.65, colors[number]);
-        ballGradient.addColorStop(1, darken(colors[number], .28));
-        ctx.fillStyle = ballGradient;
         ctx.beginPath();
-        ctx.arc(x, y, BALL_R - 1, 0, Math.PI * 2);
+        ctx.arc(x, y, BALL_R - .7, 0, Math.PI * 2);
         ctx.fill();
       }
+      // Number discs sit at both poles of the local Z axis.
+      for (const sign of [1, -1]) {
+        const facing = ez[2] * sign;
+        if (facing < .04) continue;
+        ctx.save();
+        ctx.transform(ex[0] * sign, ex[1] * sign, ey[0], ey[1], x + ez[0] * sign * BALL_R, y + ez[1] * sign * BALL_R);
+        ctx.fillStyle = "#fffdf5";
+        ctx.beginPath(); ctx.arc(0, 0, 6.3, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#20251f";
+        ctx.font = "bold 9px Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(number), 0, .4);
+        ctx.restore();
+      }
+      const shade = ctx.createRadialGradient(x - 5, y - 6, 1, x, y, BALL_R + 2);
+      shade.addColorStop(0, "rgba(255,255,255,.28)");
+      shade.addColorStop(.55, "rgba(0,0,0,0)");
+      shade.addColorStop(1, "rgba(0,0,0,.38)");
+      ctx.fillStyle = shade;
+      ctx.fillRect(x - BALL_R, y - BALL_R, BALL_R * 2, BALL_R * 2);
       ctx.restore();
-      ctx.fillStyle = "#f8f7ed";
-      ctx.beginPath(); ctx.arc(x - 4.5, y - 5, 2.5, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = "#fffdf5";
-      ctx.beginPath(); ctx.arc(x, y, 6.3, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = "#20251f";
-      ctx.font = "bold 9px Arial";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(String(number), x, y + .4);
+      ctx.fillStyle = "rgba(248,247,237,.85)";
+      ctx.beginPath(); ctx.arc(x - 4.5, y - 5, 2.2, 0, Math.PI * 2); ctx.fill();
     } else {
       const shine = ctx.createRadialGradient(x - 5, y - 6, 1, x, y, BALL_R + 2);
       shine.addColorStop(0, "#fffef2");
@@ -1618,6 +1769,18 @@
       shine.addColorStop(1, "#b7c0ae");
       ctx.fillStyle = shine;
       ctx.beginPath(); ctx.arc(x, y, BALL_R - 1, 0, Math.PI * 2); ctx.fill();
+      if (ball.orient) {
+        // Small marker dots on the cue ball make its spin visible while it rolls.
+        ctx.fillStyle = "rgba(70,95,140,.75)";
+        for (const axis of ball.orient) {
+          for (const sign of [1, -1]) {
+            if (axis[2] * sign < .1) continue;
+            ctx.beginPath();
+            ctx.ellipse(x + axis[0] * sign * BALL_R * .92, y + axis[1] * sign * BALL_R * .92, 1.7, 1.7 * axis[2] * sign, Math.atan2(axis[1], axis[0]), 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
       ctx.fillStyle = "rgba(255,255,255,.65)";
       ctx.beginPath(); ctx.arc(x - 4.5, y - 5, 2.5, 0, Math.PI * 2); ctx.fill();
     }
@@ -1718,6 +1881,7 @@
     const MAX_BANKS = 3;
     let origin = { x: cueBall.x, y: cueBall.y };
     let direction = aimDirection;
+    let sideSpin = Number(els.spinEnglish.value) / 100;
     let hit = null;
     const segments = [];
     for (let bank = 0; bank <= MAX_BANKS; bank++) {
@@ -1735,10 +1899,13 @@
       if (rail.nx !== 0) {
         direction.x *= -RAIL_RESTITUTION;
         direction.y *= RAIL_TANGENTIAL_RETENTION;
+        direction.y += sideSpin * Math.abs(direction.x / RAIL_RESTITUTION) * .18 * aimDirection.x;
       } else {
         direction.x *= RAIL_TANGENTIAL_RETENTION;
         direction.y *= -RAIL_RESTITUTION;
+        direction.x -= sideSpin * Math.abs(direction.y / RAIL_RESTITUTION) * .18 * aimDirection.y;
       }
+      sideSpin *= .72;
       const speed = Math.hypot(direction.x, direction.y);
       direction.x /= speed;
       direction.y /= speed;
@@ -1793,8 +1960,9 @@
 
       const normalVelocity = direction.x * targetDirection.x + direction.y * targetDirection.y;
       const normalTransfer = (1 + BALL_RESTITUTION) / 2;
-      const cueExitX = direction.x - targetDirection.x * normalVelocity * normalTransfer;
-      const cueExitY = direction.y - targetDirection.y * normalVelocity * normalTransfer;
+      const spinFollow = Number(els.spinFollow.value) / 100 * .34;
+      const cueExitX = direction.x - targetDirection.x * normalVelocity * normalTransfer + direction.x * spinFollow;
+      const cueExitY = direction.y - targetDirection.y * normalVelocity * normalTransfer + direction.y * spinFollow;
       const cueExitLength = Math.hypot(cueExitX, cueExitY);
       if (cueExitLength > .08) {
         const cueExit = { x: cueExitX / cueExitLength, y: cueExitY / cueExitLength };
@@ -1931,10 +2099,21 @@
     els.mobilePowerValue.value = `${percent}%`;
     els.mobilePowerValue.textContent = `${percent}%`;
   });
+  els.toggleShotControls.addEventListener("click", () => {
+    showShotControls = !showShotControls;
+    els.toggleShotControls.setAttribute("aria-expanded", String(showShotControls));
+    updateUI();
+  });
+  els.toggleSpinControls.addEventListener("click", () => {
+    const show = els.spinControls.hidden;
+    els.spinControls.hidden = !show;
+    els.toggleSpinControls.setAttribute("aria-expanded", String(show));
+  });
   els.mobileShoot.addEventListener("click", () => {
     if (els.mobileShoot.disabled) return;
     shoot(Number(els.mobilePower.value), aimAngle);
   });
+  els.spinSliders.forEach((slider) => slider.addEventListener("input", updateSpinReadouts));
   els.modeButtons.forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
   document.getElementById("reset-button").addEventListener("click", resetGame);
   document.getElementById("new-rack-button").addEventListener("click", resetGame);
