@@ -28,10 +28,12 @@
   const modeDetails = {
     pvp: ["Head to head", {
       nine: "Take turns with a friend. Lowest ball first — sink the 9 to win.",
+      ten: "Take turns with a friend. Lowest ball first — sink the 10 to win.",
       eight: "Take turns with a friend. Claim solids or stripes, clear your group, then sink the 8."
     }],
     ai: ["You vs the house", {
       nine: "Take on the house. Make the lowest ball first and sink the 9 to win.",
+      ten: "Take on the house. Make the lowest ball first and sink the 10 to win.",
       eight: "Take on the house. Claim solids or stripes, clear your group, then sink the 8."
     }],
     timer: ["Beat the clock", "Clear the table before time runs out. Every shot counts."],
@@ -93,6 +95,7 @@
     aiSettings: document.getElementById("ai-settings"),
     difficultySelect: document.getElementById("difficulty-select"),
     rulesNine: document.getElementById("rules-nine"),
+    rulesTen: document.getElementById("rules-ten"),
     rulesEight: document.getElementById("rules-eight"),
     captionVariant: document.getElementById("caption-variant"),
     roomName: document.getElementById("room-name")
@@ -194,6 +197,14 @@
     return variant === "eight" && (mode === "pvp" || mode === "ai");
   }
 
+  function isTenBall() {
+    return variant === "ten" && (mode === "pvp" || mode === "ai");
+  }
+
+  function finalBallNumber() {
+    return isTenBall() ? 10 : 9;
+  }
+
   function groupOf(number) {
     return number === 8 ? "eight" : number < 8 ? "solids" : "stripes";
   }
@@ -201,6 +212,16 @@
   function rackBalls() {
     if (isEightBall()) {
       const rows = [[1], [9, 2], [10, 8, 3], [4, 11, 12, 5], [6, 13, 7, 14, 15]];
+      balls = [];
+      rows.forEach((row, rowIndex) => row.forEach((number, slot) => {
+        balls.push(makeBall(number, 650 + rowIndex * BALL_R * 1.75, H / 2 + (slot - rowIndex / 2) * BALL_R * 2.05));
+      }));
+      cueBall = makeBall(0, 275, H / 2);
+      balls.push(cueBall);
+      return;
+    }
+    if (isTenBall()) {
+      const rows = [[1], [2, 3], [4, 10, 5], [6, 7, 8, 9]];
       balls = [];
       rows.forEach((row, rowIndex) => row.forEach((number, slot) => {
         balls.push(makeBall(number, 650 + rowIndex * BALL_R * 1.75, H / 2 + (slot - rowIndex / 2) * BALL_R * 2.05));
@@ -279,10 +300,11 @@
     els.modeDescription.textContent = typeof description === "string" ? description : description[variant];
     els.variantSettings.hidden = mode === "timer" || mode === "trick";
     els.aiSettings.hidden = mode !== "ai";
-    els.rulesNine.hidden = isEightBall();
+    els.rulesNine.hidden = isEightBall() || isTenBall();
+    els.rulesTen.hidden = !isTenBall();
     els.rulesEight.hidden = !isEightBall();
-    els.captionVariant.textContent = isEightBall() ? "8-BALL" : "9-BALL";
-    els.roomName.textContent = isEightBall() ? "THE EIGHT-BALL ROOM" : "THE NINE-BALL ROOM";
+    els.captionVariant.textContent = isEightBall() ? "8-BALL" : isTenBall() ? "10-BALL" : "9-BALL";
+    els.roomName.textContent = isEightBall() ? "THE EIGHT-BALL ROOM" : isTenBall() ? "THE TEN-BALL ROOM" : "THE NINE-BALL ROOM";
     els.timerSettings.hidden = mode !== "timer";
     els.timerDisplay.hidden = mode !== "timer";
     updateCpuName();
@@ -313,7 +335,8 @@
     els.ballsCount.innerHTML = `${activeBalls.length} <small>LEFT</small>`;
     els.ballTracker.innerHTML = "";
     els.ballTracker.classList.toggle("wide", eight);
-    const trackerCount = eight ? 15 : 9;
+    els.ballTracker.classList.toggle("ten", isTenBall());
+    const trackerCount = eight ? 15 : isTenBall() ? 10 : 9;
     for (let number = 1; number <= trackerCount; number += 1) {
       const ball = document.createElement("span");
       const pocketed = !balls.some((item) => item.number === number && item.active);
@@ -829,16 +852,16 @@
       lastShotPocketed = true;
       return;
     }
-    if (ball.number === 9) {
+    if (ball.number === finalBallNumber()) {
       nineBallPocketedThisShot = true;
     }
     ballsPocketedThisShot = true;
     lastShotPocketed = true;
-    if (ball.number !== 9) scores[currentPlayer] += 1;
+    if (ball.number !== finalBallNumber()) scores[currentPlayer] += 1;
   }
 
   function respotNineBall() {
-    respotBall(9, { x: 650 + BALL_R * 4, y: H / 2 });
+    respotBall(finalBallNumber(), isTenBall() ? { x: 650, y: H / 2 } : { x: 650 + BALL_R * 4, y: H / 2 });
   }
 
   function respotBall(number, spot) {
@@ -921,6 +944,10 @@
       } else {
         consecutiveFouls[shooter] = 0;
         ballInHand = false;
+        if (nineBallPocketedThisShot && wasBreak && isTenBall() && !shotWasPushOut) {
+          respotNineBall();
+          nineBallPocketedThisShot = false;
+        }
         if (shotWasPushOut) {
           if (nineBallPocketedThisShot) respotNineBall();
           currentPlayer = 1 - shooter;
@@ -932,7 +959,7 @@
           gameOver = true;
           scores[shooter] += 1;
           els.canvasMessage.innerHTML = `<span>PLAYER ${shooter + 1} WINS THE RACK</span>`;
-          turnNotice = "The 9 ball was legally pocketed";
+          turnNotice = `The ${finalBallNumber()} ball was legally pocketed`;
         } else {
           if (wasBreak) {
             breakPending = false;
@@ -1173,7 +1200,7 @@
     const eight = isEightBall();
     const foul = sim.scratch || !targetNumbers.includes(sim.firstHit)
       || (sim.pocketed.length === 0 && !sim.railAfterContact);
-    const finalBall = eight ? 8 : 9;
+    const finalBall = eight ? 8 : finalBallNumber();
     if (sim.pocketed.includes(finalBall)) {
       const wins = !foul && (eight ? targetNumbers.length === 1 && targetNumbers[0] === 8 : true);
       if (wins) return { score: 10000, keepsTurn: true, win: true };

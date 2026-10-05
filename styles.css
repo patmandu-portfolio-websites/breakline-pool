@@ -221,4 +221,5 @@ h2 { margin: 0; font: 600 17px var(--display); letter-spacing: -.035em; }
 }
 .rules-section[hidden] { display: none; }
 .ball-tracker.wide { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+.ball-tracker.ten { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .ball-tracker.wide .tracker-ball:nth-child(8) { color: white; }
