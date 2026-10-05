@@ -134,6 +134,7 @@
   let ballInHand = false;
   let placementPoint = { x: 275, y: H / 2 };
   let breakPending = true;
+  const lastWinnerByVariant = {};
   let postBreakPushOutAvailable = false;
   let pushOutCalled = false;
   let shotWasPushOut = false;
@@ -244,11 +245,13 @@
     balls.push(cueBall);
   }
 
-  function resetGame() {
+  function resetGame({ rematch = false } = {}) {
     if (aiTimeout) window.clearTimeout(aiTimeout);
     aiTimeout = null;
+    const cpuBreaks = rematch === true && mode === "ai" && lastWinnerByVariant[variant] === 1;
+    if (rematch === true && mode === "ai") delete lastWinnerByVariant[variant];
     rackBalls();
-    currentPlayer = 0;
+    currentPlayer = cpuBreaks ? 1 : 0;
     scores = [0, 0];
     moving = false;
     gameOver = false;
@@ -281,6 +284,7 @@
       remainingSeconds = selectedMinutes() * 60;
     }
     updateUI();
+    if (cpuBreaks) scheduleAiShot();
   }
 
   function selectedMinutes() {
@@ -922,6 +926,7 @@
         ballInHand = true;
         if (consecutiveFouls[shooter] >= 3) {
           gameOver = true;
+          if (mode === "ai") lastWinnerByVariant[variant] = currentPlayer;
           if (mode === "timer") {
             els.canvasMessage.innerHTML = "<span>THREE CONSECUTIVE FOULS — RUN OVER</span>";
           } else {
@@ -957,6 +962,7 @@
           turnNotice = "Push-out played — choose whether to take the shot";
         } else if (nineBallPocketedThisShot) {
           gameOver = true;
+          if (mode === "ai") lastWinnerByVariant[variant] = shooter;
           scores[shooter] += 1;
           els.canvasMessage.innerHTML = `<span>PLAYER ${shooter + 1} WINS THE RACK</span>`;
           turnNotice = `The ${finalBallNumber()} ball was legally pocketed`;
@@ -1006,6 +1012,7 @@
         const legalWin = !foul && shotTargetNumbers.length === 1 && shotTargetNumbers[0] === 8;
         const winner = legalWin ? shooter : opponent;
         gameOver = true;
+        if (mode === "ai") lastWinnerByVariant[variant] = winner;
         ballInHand = false;
         els.canvasMessage.innerHTML = `<span>PLAYER ${winner + 1} WINS THE RACK</span>`;
         turnNotice = legalWin ? "The 8 ball was legally pocketed"
@@ -2142,8 +2149,8 @@
   });
   els.spinSliders.forEach((slider) => slider.addEventListener("input", updateSpinReadouts));
   els.modeButtons.forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
-  document.getElementById("reset-button").addEventListener("click", resetGame);
-  document.getElementById("new-rack-button").addEventListener("click", resetGame);
+  document.getElementById("reset-button").addEventListener("click", () => resetGame({ rematch: true }));
+  document.getElementById("new-rack-button").addEventListener("click", () => resetGame({ rematch: true }));
   els.callPushOut.addEventListener("click", () => {
     if (!postBreakPushOutAvailable || moving || gameOver || ballInHand) return;
     pushOutCalled = true;
