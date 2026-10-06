@@ -7,7 +7,6 @@
   const H = 590;
   const BALL_R = 14;
   const POCKET_R = 25;
-  const SIDE_POCKET_R = 21;
   const BALL_RESTITUTION = 0.96;
   const RAIL_RESTITUTION = 0.86;
   const RAIL_TANGENTIAL_RETENTION = 0.985;
@@ -17,8 +16,8 @@
   const TABLE = { left: 73, right: 927, top: 73, bottom: 517 };
   const BAULK_LINE_X = 336;
   const pockets = [
-    { x: 64, y: 64, radius: POCKET_R }, { x: 500, y: 62, radius: SIDE_POCKET_R }, { x: 936, y: 64, radius: POCKET_R },
-    { x: 64, y: 526, radius: POCKET_R }, { x: 500, y: 528, radius: SIDE_POCKET_R }, { x: 936, y: 526, radius: POCKET_R }
+    { x: 60, y: 60, radius: POCKET_R }, { x: 500, y: 56, radius: POCKET_R }, { x: 940, y: 60, radius: POCKET_R },
+    { x: 60, y: 530, radius: POCKET_R }, { x: 500, y: 534, radius: POCKET_R }, { x: 940, y: 530, radius: POCKET_R }
   ];
   const colors = {
     1: "#f2cb27", 2: "#2583ce", 3: "#d94336", 4: "#7950b1",
@@ -148,7 +147,7 @@
   const felt = makeFeltTexture();
 
   function pocketCaptureRadius(pocket) {
-    return pocket.radius + BALL_R;
+    return pocket.radius + BALL_R + 4;
   }
 
   function makeFeltTexture() {
@@ -1601,18 +1600,69 @@
     return best.shot;
   }
 
+  // Guards against planned shots (e.g. bank routes or degenerate geometry) whose simulation never
+  // contacts a legal ball first, such as the cue ball being fired at a pocket.
+  function ensureShotHitsTarget(shot, targets) {
+    const hitsTarget = (angle, power) => targets.some((target) => target.number === simulateShot(angle, power).firstHit);
+    if (hitsTarget(shot.angle, shot.power)) return shot;
+    const escape = findEscapeShot(targets);
+    if (escape) return { ...shot, angle: escape.angle, power: escape.power };
+    const ordered = [...targets].sort((a, b) => Math.hypot(a.x - cueBall.x, a.y - cueBall.y) - Math.hypot(b.x - cueBall.x, b.y - cueBall.y));
+    for (const target of ordered) {
+      const angle = Math.atan2(target.y - cueBall.y, target.x - cueBall.x);
+      for (const power of [44, 80, 28]) {
+        if (hitsTarget(angle, power)) return { ...shot, angle, power };
+      }
+    }
+    const angle = Math.atan2(ordered[0].y - cueBall.y, ordered[0].x - cueBall.x);
+    return { ...shot, angle, power: 44 };
+  }
+
+  // The break: the cue ball is placed behind the baulk line and must strike the lowest ball
+  // (any legal target in eight-ball) first.
+  function planAiBreak(targets) {
+    cueBall.active = true;
+    const spots = [];
+    for (const y of [H / 2, H / 2 - 60, H / 2 + 60, H / 2 - 120, H / 2 + 120]) {
+      spots.push({ x: Math.min(cueBall.x, BAULK_LINE_X - BALL_R - 2), y }, { x: BAULK_LINE_X - BALL_R - 40, y });
+    }
+    const spot = spots.find((candidate) => isCuePlacementValid(candidate.x, candidate.y))
+      || (isCuePlacementValid(cueBall.x, cueBall.y) ? { x: cueBall.x, y: cueBall.y } : spots[0]);
+    cueBall.x = spot.x;
+    cueBall.y = spot.y;
+    cueBall.vx = 0;
+    cueBall.vy = 0;
+    placementPoint = { x: spot.x, y: spot.y };
+
+    const ordered = [...targets].sort((a, b) => Math.hypot(a.x - spot.x, a.y - spot.y) - Math.hypot(b.x - spot.x, b.y - spot.y));
+    const lowest = isEightBall() ? ordered[0] : targets[0];
+    const angle = Math.atan2(lowest.y - spot.y, lowest.x - spot.x);
+    let fallback = null;
+    for (const power of [MAX_PULL * .85, MAX_PULL * .7, MAX_PULL * .55]) {
+      const sim = simulateShot(angle, power);
+      if (!targets.some((target) => target.number === sim.firstHit)) continue;
+      if (!sim.scratch) return { angle, power, quality: 0, target: lowest };
+      fallback = fallback || { angle, power, quality: 0, target: lowest };
+    }
+    return fallback || { angle, power: MAX_PULL * .6, quality: 0, target: lowest };
+  }
+
   function scheduleAiShot() {
     const targets = legalTargets(1);
     if (targets.length === 0) return;
-    let shot = ballInHand
-      ? placeCueBallForAi(targets)
-      : cueBall.active
-        ? chooseBestShot(targets)
-        : null;
-    if (shot && shot.quality >= 10000) shot = findEscapeShot(targets) || shot;
+    const isBreak = breakPending && ballInHand;
+    let shot = isBreak
+      ? planAiBreak(targets)
+      : ballInHand
+        ? placeCueBallForAi(targets)
+        : cueBall.active
+          ? chooseBestShot(targets)
+          : null;
+    if (!isBreak && shot && shot.quality >= 10000) shot = findEscapeShot(targets) || shot;
     ballInHand = false;
     if (!shot) return;
-    if (aiDifficulty > 1 && shot.quality < 5000) shot = refineAiShot(shot, targets);
+    if (!isBreak && aiDifficulty > 1 && shot.quality < 5000) shot = refineAiShot(shot, targets);
+    if (cueBall.active) shot = ensureShotHitsTarget(shot, targets);
     aimAngle = shot.angle;
     turnNotice = "The house is lining it up…";
     updateUI();
