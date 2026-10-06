@@ -1070,6 +1070,45 @@
     if (mode === "ai" && currentPlayer === 1 && !gameOver) scheduleAiShot();
   }
 
+  // Used when no clean pot exists (typically a snooker behind another ball): sweeps every direction
+  // and power, including cushion kicks around the blocker, and keeps the best legal hit that
+  // either pots something or leaves the opponent a difficult table.
+  function findEscapeShot(targets) {
+    if (!cueBall.active || targets.length === 0) return null;
+    const degrees = Math.PI / 180;
+    const powers = [32, 62, 100];
+    const legal = [];
+    const tryShot = (angle, power) => {
+      const sim = simulateShot(angle, power);
+      if (!targets.some((target) => target.number === sim.firstHit)) return;
+      const outcome = scoreAiOutcome(sim, targets);
+      if (sim.scratch || outcome.score <= -300) return;
+      legal.push({ angle, power, sim, score: outcome.score - power * .15 });
+    };
+    for (let deg = 0; deg < 360; deg += 3) {
+      for (const power of powers) tryShot(deg * degrees, power);
+    }
+    if (legal.length === 0) return null;
+    legal.sort((a, b) => b.score - a.score);
+    for (const seed of legal.slice(0, 3)) {
+      for (const offset of [-1.5, -.75, .75, 1.5]) tryShot(seed.angle + offset * degrees, seed.power);
+    }
+    legal.sort((a, b) => b.score - a.score);
+    let best = null;
+    for (const shot of legal.slice(0, 8)) {
+      let score = shot.score;
+      if (shot.score <= 0) {
+        score += withSimulatedTable(shot.sim, () => {
+          const opponentTargets = legalTargets(0);
+          if (opponentTargets.length === 0) return 0;
+          return Math.min(chooseBestShot(opponentTargets).quality, 600) / 20;
+        });
+      }
+      if (!best || score > best.score) best = { ...shot, score };
+    }
+    return best ? { angle: best.angle, power: best.power, quality: 5000, target: targets[0] } : null;
+  }
+
   function aiShotCandidates(target) {
     const objectBalls = balls.filter((ball) => ball.active && ball.number > 0 && ball !== target);
     const candidates = [];
@@ -1273,7 +1312,7 @@
       const center = { ...best };
       for (const offset of expert ? [-.6, -.3, .3, .6] : [-.35, .35]) consider({ angle: center.angle + offset * degrees, power: center.power });
     }
-    if (!best || best.score <= -300) return baseShot;
+    if (!best || best.score <= -300) return findEscapeShot(targets) || baseShot;
     return { ...baseShot, angle: best.angle, power: best.power };
   }
 
@@ -1570,9 +1609,10 @@
       : cueBall.active
         ? chooseBestShot(targets)
         : null;
+    if (shot && shot.quality >= 10000) shot = findEscapeShot(targets) || shot;
     ballInHand = false;
     if (!shot) return;
-    if (aiDifficulty > 1) shot = refineAiShot(shot, targets);
+    if (aiDifficulty > 1 && shot.quality < 5000) shot = refineAiShot(shot, targets);
     aimAngle = shot.angle;
     turnNotice = "The house is lining it up…";
     updateUI();
@@ -1823,39 +1863,80 @@
 
   function drawCue() {
     const direction = { x: Math.cos(aimAngle), y: Math.sin(aimAngle) };
+    const normal = { x: -direction.y, y: direction.x };
     const tipDistance = 17 + pullDistance;
-    const buttDistance = 168 + pullDistance;
-    const tip = { x: cueBall.x - direction.x * tipDistance, y: cueBall.y - direction.y * tipDistance };
-    const butt = { x: cueBall.x - direction.x * buttDistance, y: cueBall.y - direction.y * buttDistance };
-    const dx = butt.x - tip.x;
-    const dy = butt.y - tip.y;
-    const length = Math.hypot(dx, dy);
-    const nx = -dy / length;
-    const ny = dx / length;
+    const buttDistance = 205 + pullDistance;
+    const handleLength = 78;
+    const tipWidth = 5.6;
+    const connectWidth = 7;
+    const buttWidth = 10;
+    const at = (distance) => ({ x: cueBall.x - direction.x * distance, y: cueBall.y - direction.y * distance });
+    const quad = (startDistance, endDistance, startWidth, endWidth) => {
+      const a = at(startDistance);
+      const b = at(endDistance);
+      ctx.beginPath();
+      ctx.moveTo(a.x + normal.x * startWidth / 2, a.y + normal.y * startWidth / 2);
+      ctx.lineTo(b.x + normal.x * endWidth / 2, b.y + normal.y * endWidth / 2);
+      ctx.lineTo(b.x - normal.x * endWidth / 2, b.y - normal.y * endWidth / 2);
+      ctx.lineTo(a.x - normal.x * startWidth / 2, a.y - normal.y * startWidth / 2);
+      ctx.closePath();
+    };
+    const roundShade = (startDistance, endDistance, width, startWidth = width) => {
+      const a = at(startDistance);
+      const b = at(endDistance);
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      const shade = ctx.createLinearGradient(mx - normal.x * width / 2, my - normal.y * width / 2, mx + normal.x * width / 2, my + normal.y * width / 2);
+      shade.addColorStop(0, "rgba(0,0,0,.5)");
+      shade.addColorStop(.3, "rgba(255,255,255,.35)");
+      shade.addColorStop(.55, "rgba(255,255,255,0)");
+      shade.addColorStop(1, "rgba(0,0,0,.55)");
+      ctx.fillStyle = shade;
+      quad(startDistance, endDistance, startWidth, width);
+      ctx.fill();
+    };
+    const handleStartDistance = buttDistance - handleLength;
+    const tip = at(tipDistance);
+    const handleStart = at(handleStartDistance);
+    const butt = at(buttDistance);
+    const ferruleLength = 6;
+    const tipLength = 4;
+
     ctx.save();
-    ctx.lineCap = "round";
     ctx.shadowColor = "rgba(0,0,0,.55)";
     ctx.shadowBlur = 4;
     ctx.shadowOffsetY = 3;
-    const cue = ctx.createLinearGradient(tip.x, tip.y, butt.x, butt.y);
-    cue.addColorStop(0, "#c3a172");
-    cue.addColorStop(.12, "#e1c99a");
-    cue.addColorStop(.75, "#9b673a");
-    cue.addColorStop(1, "#e0c293");
-    ctx.strokeStyle = cue;
-    ctx.lineWidth = 8;
-    ctx.beginPath(); ctx.moveTo(tip.x, tip.y); ctx.lineTo(butt.x, butt.y); ctx.stroke();
+    const shaft = ctx.createLinearGradient(tip.x, tip.y, handleStart.x, handleStart.y);
+    shaft.addColorStop(0, "#e1c99a");
+    shaft.addColorStop(1, "#d3ae78");
+    ctx.fillStyle = shaft;
+    quad(tipDistance + tipLength + ferruleLength, handleStartDistance, tipWidth, connectWidth);
+    ctx.fill();
     ctx.shadowColor = "transparent";
-    ctx.strokeStyle = "#ece3c9";
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(tip.x, tip.y); ctx.lineTo(tip.x - direction.x * 9, tip.y - direction.y * 9); ctx.stroke();
-    ctx.strokeStyle = "rgba(70,37,24,.9)";
-    ctx.lineWidth = 2.5;
-    const wrap = { x: butt.x - direction.x * 27, y: butt.y - direction.y * 27 };
-    ctx.beginPath(); ctx.moveTo(wrap.x + nx * 4, wrap.y + ny * 4); ctx.lineTo(butt.x, butt.y); ctx.stroke();
+    roundShade(tipDistance + tipLength + ferruleLength, handleStartDistance, connectWidth, tipWidth);
+    ctx.shadowColor = "rgba(0,0,0,.55)";
+    const handle = ctx.createLinearGradient(handleStart.x, handleStart.y, butt.x, butt.y);
+    handle.addColorStop(0, "#6b3f20");
+    handle.addColorStop(.5, "#4a2a14");
+    handle.addColorStop(1, "#2e1a0d");
+    ctx.fillStyle = handle;
+    quad(handleStartDistance, buttDistance, connectWidth, buttWidth);
+    ctx.fill();
+    ctx.shadowColor = "transparent";
+    roundShade(handleStartDistance, buttDistance, buttWidth, connectWidth);
+    ctx.fillStyle = "#c9a86a";
+    quad(handleStartDistance, handleStartDistance - 3, connectWidth, connectWidth);
+    ctx.fill();
+    ctx.fillStyle = "#ece3c9";
+    quad(tipDistance + tipLength, tipDistance + tipLength + ferruleLength, tipWidth, tipWidth);
+    ctx.fill();
+    roundShade(tipDistance + tipLength, tipDistance + tipLength + ferruleLength, tipWidth);
+    ctx.fillStyle = "#3d7fb5";
+    quad(tipDistance, tipDistance + tipLength, tipWidth, tipWidth);
+    ctx.fill();
+    roundShade(tipDistance, tipDistance + tipLength, tipWidth);
     ctx.restore();
   }
-
   function rayCircleDistance(origin, direction, center, radius) {
     const offsetX = center.x - origin.x;
     const offsetY = center.y - origin.y;
