@@ -1622,29 +1622,47 @@
   // (any legal target in eight-ball) first.
   function planAiBreak(targets) {
     cueBall.active = true;
-    const spots = [];
-    for (const y of [H / 2, H / 2 - 60, H / 2 + 60, H / 2 - 120, H / 2 + 120]) {
-      spots.push({ x: Math.min(cueBall.x, BAULK_LINE_X - BALL_R - 2), y }, { x: BAULK_LINE_X - BALL_R - 40, y });
-    }
-    const spot = spots.find((candidate) => isCuePlacementValid(candidate.x, candidate.y))
-      || (isCuePlacementValid(cueBall.x, cueBall.y) ? { x: cueBall.x, y: cueBall.y } : spots[0]);
-    cueBall.x = spot.x;
-    cueBall.y = spot.y;
-    cueBall.vx = 0;
-    cueBall.vy = 0;
-    placementPoint = { x: spot.x, y: spot.y };
-
-    const ordered = [...targets].sort((a, b) => Math.hypot(a.x - spot.x, a.y - spot.y) - Math.hypot(b.x - spot.x, b.y - spot.y));
-    const lowest = isEightBall() ? ordered[0] : targets[0];
-    const angle = Math.atan2(lowest.y - spot.y, lowest.x - spot.x);
+    const minX = TABLE.left + BALL_R + 2;
+    const maxX = BAULK_LINE_X - BALL_R - 2;
+    const minY = TABLE.top + BALL_R + 2;
+    const maxY = TABLE.bottom - BALL_R - 2;
+    const powerLevels = [.45, .6, .75, .9, 1].map((level) => MAX_PULL * level);
+    const legal = [];
     let fallback = null;
-    for (const power of [MAX_PULL * .85, MAX_PULL * .7, MAX_PULL * .55]) {
+
+    // Try random spots anywhere behind the baulk line with varied power, keeping legal non-scratch breaks.
+    for (let attempt = 0; attempt < 24 && legal.length < 6; attempt += 1) {
+      const spot = { x: minX + Math.random() * (maxX - minX), y: minY + Math.random() * (maxY - minY) };
+      if (!isCuePlacementValid(spot.x, spot.y)) continue;
+      cueBall.x = spot.x;
+      cueBall.y = spot.y;
+      cueBall.vx = 0;
+      cueBall.vy = 0;
+      const ordered = [...targets].sort((a, b) => Math.hypot(a.x - spot.x, a.y - spot.y) - Math.hypot(b.x - spot.x, b.y - spot.y));
+      const lowest = isEightBall() ? ordered[0] : targets[0];
+      const angle = Math.atan2(lowest.y - spot.y, lowest.x - spot.x);
+      const power = powerLevels[Math.floor(Math.random() * powerLevels.length)];
       const sim = simulateShot(angle, power);
       if (!targets.some((target) => target.number === sim.firstHit)) continue;
-      if (!sim.scratch) return { angle, power, quality: 0, target: lowest };
-      fallback = fallback || { angle, power, quality: 0, target: lowest };
+      const candidate = { spot, shot: { angle, power, quality: 0, target: lowest } };
+      if (sim.scratch) fallback = fallback || candidate;
+      else legal.push(candidate);
     }
-    return fallback || { angle, power: MAX_PULL * .6, quality: 0, target: lowest };
+
+    let chosen = legal.length > 0 ? legal[Math.floor(Math.random() * legal.length)] : fallback;
+    if (!chosen) {
+      const spot = isCuePlacementValid(BAULK_LINE_X - BALL_R - 40, H / 2)
+        ? { x: BAULK_LINE_X - BALL_R - 40, y: H / 2 }
+        : { x: cueBall.x, y: cueBall.y };
+      const lowest = targets[0];
+      chosen = { spot, shot: { angle: Math.atan2(lowest.y - spot.y, lowest.x - spot.x), power: MAX_PULL * .6, quality: 0, target: lowest } };
+    }
+    cueBall.x = chosen.spot.x;
+    cueBall.y = chosen.spot.y;
+    cueBall.vx = 0;
+    cueBall.vy = 0;
+    placementPoint = { x: chosen.spot.x, y: chosen.spot.y };
+    return chosen.shot;
   }
 
   function scheduleAiShot() {
