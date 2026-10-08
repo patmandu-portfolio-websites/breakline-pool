@@ -2147,11 +2147,16 @@
         ctx.setLineDash([]);
       }
 
-      let pathLength = distanceToTableEdge(hit.ball, targetDirection);
+      const targetRail = distanceToRailWithNormal(hit.ball, targetDirection);
+      let pathLength = targetRail.distance;
+      let targetBlocked = false;
       for (const ball of balls) {
         if (!ball.active || ball === cueBall || ball === hit.ball) continue;
         const blockerDistance = rayCircleDistance(hit.ball, targetDirection, ball, BALL_R * 2);
-        if (blockerDistance !== null && blockerDistance < pathLength) pathLength = blockerDistance;
+        if (blockerDistance !== null && blockerDistance < pathLength) {
+          pathLength = blockerDistance;
+          targetBlocked = true;
+        }
       }
       let pocketDistance = null;
       for (const pocket of pockets) {
@@ -2180,9 +2185,30 @@
         ctx.lineTo(pathEnd.x, pathEnd.y);
         ctx.stroke();
         ctx.setLineDash([]);
+        const reachesBank = !targetBlocked && pocketDistance === null
+          && Math.abs(pathLength - targetRail.distance) < .001
+          && !pockets.some((pocket) => Math.hypot(pathEnd.x - pocket.x, pathEnd.y - pocket.y)
+            < pocketCaptureRadius(pocket) + BALL_R);
+        if (reachesBank) {
+          const normalVelocity = targetDirection.x * targetRail.nx + targetDirection.y * targetRail.ny;
+          const reflected = {
+            x: targetDirection.x - 2 * normalVelocity * targetRail.nx,
+            y: targetDirection.y - 2 * normalVelocity * targetRail.ny
+          };
+          const bankPreviewLength = 30;
+          const bankEnd = {
+            x: pathEnd.x + reflected.x * bankPreviewLength,
+            y: pathEnd.y + reflected.y * bankPreviewLength
+          };
+          ctx.setLineDash([8, 6]);
+          ctx.beginPath();
+          ctx.moveTo(pathEnd.x, pathEnd.y);
+          ctx.lineTo(bankEnd.x, bankEnd.y);
+          ctx.stroke();
+        }
         ctx.fillStyle = "rgba(201,243,106,.95)";
         ctx.beginPath();
-        ctx.arc(pathEnd.x, pathEnd.y, 3, 0, Math.PI * 2);
+        ctx.arc(pathEnd.x, pathEnd.y, reachesBank ? 3.5 : 3, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.strokeStyle = "rgba(201,243,106,.72)";
