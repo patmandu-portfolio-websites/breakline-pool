@@ -5,20 +5,31 @@
   const ctx = canvas.getContext("2d");
   const W = 1000;
   const H = 590;
-  const BALL_R = 14;
   const POCKET_R = 25;
   const BALL_RESTITUTION = 0.96;
   const RAIL_RESTITUTION = 0.86;
   const RAIL_TANGENTIAL_RETENTION = 0.985;
   const BALL_FRICTION = 240;
   const MAX_PULL = 150;
-  const SHOT_SPEED_PER_PULL = 14;
+  // Table geometry is switched between pool and snooker by configureTable().
+  let BALL_R = 14;
+  let SHOT_SPEED_PER_PULL = 14;
+  let BAULK_LINE_X = 336;
+  let tableIsSnooker = false;
   const TABLE = { left: 73, right: 927, top: 73, bottom: 517 };
-  const BAULK_LINE_X = 336;
   const pockets = [
     { x: 60, y: 60, radius: POCKET_R }, { x: 500, y: 56, radius: POCKET_R }, { x: 940, y: 60, radius: POCKET_R },
     { x: 60, y: 530, radius: POCKET_R }, { x: 500, y: 534, radius: POCKET_R }, { x: 940, y: 530, radius: POCKET_R }
   ];
+  const POOL_POCKETS = pockets.map((pocket) => ({ ...pocket }));
+  // A full-size snooker table is 3569 x 1778 mm (12 x 6 ft) with 52.5 mm balls.
+  const SNOOKER_SCALE = (TABLE.right - TABLE.left) / 3569;
+  const SNOOKER_BALL_R = 52.5 / 2 * SNOOKER_SCALE;
+  const SNOOKER_D_RADIUS = 292 * SNOOKER_SCALE;
+  const SNOOKER_VALUES = { 16: 2, 17: 3, 18: 4, 19: 5, 20: 6, 21: 7 };
+  const SNOOKER_NAMES = { 16: "Yellow", 17: "Green", 18: "Brown", 19: "Blue", 20: "Pink", 21: "Black" };
+  const SNOOKER_COLORS = { 16: "#f0d21c", 17: "#16824a", 18: "#7a4a24", 19: "#1f5fc2", 20: "#f08fb4", 21: "#15171a" };
+  const snookerSpots = {};
   const colors = {
     1: "#f2cb27", 2: "#2583ce", 3: "#d94336", 4: "#7950b1",
     5: "#ed8b26", 6: "#258552", 7: "#8c3034", 8: "#171a19", 9: "#e8bf23",
@@ -28,12 +39,14 @@
     pvp: ["Head to head", {
       nine: "Take turns with a friend. Lowest ball first — sink the 9 to win.",
       ten: "Take turns with a friend. Lowest ball first — sink the 10 to win.",
-      eight: "Take turns with a friend. Claim solids or stripes, clear your group, then sink the 8."
+      eight: "Take turns with a friend. Claim solids or stripes, clear your group, then sink the 8.",
+      snooker: "Take turns with a friend. Pot a red, then a colour, and keep alternating. Clear the colours in order for the highest score."
     }],
     ai: ["You vs the house", {
       nine: "Take on the house. Make the lowest ball first and sink the 9 to win.",
       ten: "Take on the house. Make the lowest ball first and sink the 10 to win.",
-      eight: "Take on the house. Claim solids or stripes, clear your group, then sink the 8."
+      eight: "Take on the house. Claim solids or stripes, clear your group, then sink the 8.",
+      snooker: "Take on the house. Pot a red, then a colour, and keep alternating. Clear the colours in order for the highest score."
     }],
     timer: ["Beat the clock", "Clear the table before time runs out. Every shot counts."],
     trick: ["Trick shot", "Arrange the balls anywhere, then shoot. Pocket balls any way you like."]
@@ -96,6 +109,7 @@
     rulesNine: document.getElementById("rules-nine"),
     rulesTen: document.getElementById("rules-ten"),
     rulesEight: document.getElementById("rules-eight"),
+    rulesSnooker: document.getElementById("rules-snooker"),
     captionVariant: document.getElementById("caption-variant"),
     roomName: document.getElementById("room-name")
   };
@@ -112,6 +126,8 @@
   let scores = [0, 0];
   let cueBall;
   let aimAngle = 0;
+  let aimGoal = null;
+  let aimEased = 0;
   let aimFromPull = false;
   let draggingCue = false;
   let touchAiming = false;
@@ -143,21 +159,29 @@
   let railContactAfterFirstHit = false;
   let nineBallPocketedThisShot = false;
   let consecutiveFouls = [0, 0];
+  // Snooker state: "red" (a red is on), "colour" (any colour is on) or "sequence" (colours in order).
+  let snookerPhase = "red";
+  let snookerBreak = 0;
 
-  const felt = makeFeltTexture();
+  const felt = makeFeltTexture("#17603b", 93217);
+  const snookerFelt = makeFeltTexture("#2f8a38", 41177);
 
   function pocketCaptureRadius(pocket) {
-    return pocket.radius + BALL_R + 4;
+    return pocket.capture ?? pocket.radius + BALL_R + 4;
   }
 
-  function makeFeltTexture() {
+  function pocketAimTolerance(pocket) {
+    return pocket.aim ?? pocket.radius - BALL_R - 2;
+  }
+
+  function makeFeltTexture(base, startSeed) {
     const texture = document.createElement("canvas");
     texture.width = 220;
     texture.height = 220;
     const textureCtx = texture.getContext("2d");
-    textureCtx.fillStyle = "#17603b";
+    textureCtx.fillStyle = base;
     textureCtx.fillRect(0, 0, 220, 220);
-    let seed = 93217;
+    let seed = startSeed;
     for (let i = 0; i < 9000; i += 1) {
       seed = (seed * 16807) % 2147483647;
       const x = seed % 220;
@@ -201,6 +225,54 @@
     return variant === "ten" && (mode === "pvp" || mode === "ai");
   }
 
+  function isSnooker() {
+    return variant === "snooker" && (mode === "pvp" || mode === "ai");
+  }
+
+  function configureTable() {
+    tableIsSnooker = isSnooker();
+    pockets.length = 0;
+    if (!tableIsSnooker) {
+      BALL_R = 14;
+      SHOT_SPEED_PER_PULL = 14;
+      BAULK_LINE_X = 336;
+      Object.assign(TABLE, { left: 73, right: 927, top: 73, bottom: 517 });
+      POOL_POCKETS.forEach((pocket) => pockets.push({ ...pocket }));
+      return;
+    }
+    BALL_R = SNOOKER_BALL_R;
+    SHOT_SPEED_PER_PULL = 10;
+    const halfHeight = 1778 * SNOOKER_SCALE / 2;
+    Object.assign(TABLE, { left: 73, right: 927, top: H / 2 - halfHeight, bottom: H / 2 + halfHeight });
+    BAULK_LINE_X = TABLE.left + 737 * SNOOKER_SCALE;
+    const midX = (TABLE.left + TABLE.right) / 2;
+    const corner = { radius: 11, capture: 20, aim: 5 };
+    const middle = { radius: 12, capture: 19, aim: 6 };
+    const cornerOut = 7;
+    const middleOut = 5;
+    pockets.push(
+      { x: TABLE.left - cornerOut, y: TABLE.top - cornerOut, ...corner }, { x: midX, y: TABLE.top - middleOut, ...middle }, { x: TABLE.right + cornerOut, y: TABLE.top - cornerOut, ...corner },
+      { x: TABLE.left - cornerOut, y: TABLE.bottom + cornerOut, ...corner }, { x: midX, y: TABLE.bottom + middleOut, ...middle }, { x: TABLE.right + cornerOut, y: TABLE.bottom + cornerOut, ...corner }
+    );
+    const spotX = (mm) => TABLE.left + mm * SNOOKER_SCALE;
+    Object.assign(snookerSpots, {
+      16: { x: BAULK_LINE_X, y: H / 2 + SNOOKER_D_RADIUS },
+      17: { x: BAULK_LINE_X, y: H / 2 - SNOOKER_D_RADIUS },
+      18: { x: BAULK_LINE_X, y: H / 2 },
+      19: { x: spotX(1784.5), y: H / 2 },
+      20: { x: spotX(2677), y: H / 2 },
+      21: { x: spotX(3245), y: H / 2 }
+    });
+  }
+
+  function isRed(number) {
+    return number >= 1 && number <= 15;
+  }
+
+  function snookerValue(number) {
+    return isRed(number) ? 1 : SNOOKER_VALUES[number] ?? 0;
+  }
+
   function finalBallNumber() {
     return isTenBall() ? 10 : 9;
   }
@@ -210,6 +282,19 @@
   }
 
   function rackBalls() {
+    if (isSnooker()) {
+      balls = [];
+      const apexX = snookerSpots[20].x + BALL_R * 2 + .4;
+      for (let row = 0; row < 5; row += 1) {
+        for (let slot = 0; slot <= row; slot += 1) {
+          balls.push(makeBall(balls.length + 1, apexX + row * BALL_R * Math.sqrt(3) + row * .2, H / 2 + (slot - row / 2) * (BALL_R * 2 + .2)));
+        }
+      }
+      for (const number of [16, 17, 18, 19, 20, 21]) balls.push(makeBall(number, snookerSpots[number].x, snookerSpots[number].y));
+      cueBall = makeBall(0, BAULK_LINE_X - SNOOKER_D_RADIUS * .4, H / 2);
+      balls.push(cueBall);
+      return;
+    }
     if (isEightBall()) {
       const rows = [[1], [9, 2], [10, 8, 3], [4, 11, 12, 5], [6, 13, 7, 14, 15]];
       balls = [];
@@ -249,7 +334,10 @@
     aiTimeout = null;
     const cpuBreaks = rematch === true && mode === "ai" && lastWinnerByVariant[variant] === 1;
     if (rematch === true && mode === "ai") delete lastWinnerByVariant[variant];
+    configureTable();
     rackBalls();
+    snookerPhase = "red";
+    snookerBreak = 0;
     currentPlayer = cpuBreaks ? 1 : 0;
     scores = [0, 0];
     moving = false;
@@ -303,11 +391,12 @@
     els.modeDescription.textContent = typeof description === "string" ? description : description[variant];
     els.variantSettings.hidden = mode === "timer" || mode === "trick";
     els.aiSettings.hidden = mode !== "ai";
-    els.rulesNine.hidden = isEightBall() || isTenBall();
+    els.rulesNine.hidden = isEightBall() || isTenBall() || isSnooker();
     els.rulesTen.hidden = !isTenBall();
     els.rulesEight.hidden = !isEightBall();
-    els.captionVariant.textContent = isEightBall() ? "8-BALL" : isTenBall() ? "10-BALL" : "9-BALL";
-    els.roomName.textContent = isEightBall() ? "THE EIGHT-BALL ROOM" : isTenBall() ? "THE TEN-BALL ROOM" : "THE NINE-BALL ROOM";
+    els.rulesSnooker.hidden = !isSnooker();
+    els.captionVariant.textContent = isSnooker() ? "SNOOKER" : isEightBall() ? "8-BALL" : isTenBall() ? "10-BALL" : "9-BALL";
+    els.roomName.textContent = isSnooker() ? "THE SNOOKER ROOM" : isEightBall() ? "THE EIGHT-BALL ROOM" : isTenBall() ? "THE TEN-BALL ROOM" : "THE NINE-BALL ROOM";
     els.timerSettings.hidden = mode !== "timer";
     els.timerDisplay.hidden = mode !== "timer";
     updateCpuName();
@@ -335,28 +424,39 @@
     els.playerOneState.textContent = (currentPlayer === 0 && !gameOver ? "AT THE TABLE" : "ON DECK") + groupSuffix(0);
     els.playerTwoState.textContent = (currentPlayer === 1 && !gameOver ? "AT THE TABLE" : "ON DECK") + groupSuffix(1);
     const activeBalls = balls.filter((ball) => ball.number > 0 && ball.active);
-    els.ballsCount.innerHTML = `${activeBalls.length} <small>LEFT</small>`;
+    const snooker = isSnooker();
+    els.ballsCount.innerHTML = snooker
+      ? `${activeBalls.filter((ball) => isRed(ball.number)).length} <small>REDS LEFT</small>`
+      : `${activeBalls.length} <small>LEFT</small>`;
     els.ballTracker.innerHTML = "";
     els.ballTracker.classList.toggle("wide", eight);
     els.ballTracker.classList.toggle("ten", isTenBall());
-    const trackerCount = eight ? 15 : isTenBall() ? 10 : 9;
-    for (let number = 1; number <= trackerCount; number += 1) {
+    els.ballTracker.classList.toggle("snooker", snooker);
+    const trackerNumbers = snooker
+      ? Array.from({ length: 21 }, (_, index) => index + 1)
+      : Array.from({ length: eight ? 15 : isTenBall() ? 10 : 9 }, (_, index) => index + 1);
+    const highlighted = new Set(snookerHighlightTargets().map((ball) => ball.number));
+    for (const number of trackerNumbers) {
       const ball = document.createElement("span");
       const pocketed = !balls.some((item) => item.number === number && item.active);
-      ball.className = `tracker-ball${number > 8 ? " stripe" : ""}${pocketed ? " pocketed" : ""}`;
-      ball.style.backgroundColor = colors[number];
-      ball.setAttribute("aria-label", `${number} ball${pocketed ? ", pocketed" : ", on table"}`);
-      ball.innerHTML = `<span>${number}</span>`;
+      const label = snooker ? String(snookerValue(number)) : String(number);
+      const name = snooker ? (isRed(number) ? "Red" : SNOOKER_NAMES[number]) : `${number}`;
+      ball.className = `tracker-ball${!snooker && number > 8 ? " stripe" : ""}${pocketed ? " pocketed" : ""}${highlighted.has(number) ? " on" : ""}`;
+      ball.style.backgroundColor = snooker ? (isRed(number) ? "#c8261f" : SNOOKER_COLORS[number]) : colors[number];
+      ball.setAttribute("aria-label", `${name} ball${pocketed ? ", pocketed" : ", on table"}`);
+      ball.innerHTML = `<span>${label}</span>`;
       els.ballTracker.appendChild(ball);
     }
     els.statusLabel.textContent = gameOver ? "RACK COMPLETE" : mode === "trick" ? "FREE PLAY" : currentPlayer === 1 && mode === "ai" ? "HOUSE TURN" : `PLAYER ${currentPlayer + 1}'S TURN`;
     els.statusDetail.textContent = gameOver ? "Start a new rack to play again" : moving ? "Balls in motion" : ballInHand
-      ? turnNotice || (breakPending
+      ? turnNotice || (snooker
+        ? "Place the cue ball anywhere inside the D"
+        : breakPending
         ? "Break setup — place the cue ball behind the baulk line"
         : cueBall.active
           ? "Ball in hand — click open spot to move, or click cue to shoot from here"
           : "Ball in hand — click a clear spot on the table to place the cue ball")
-      : turnNotice || (mode === "trick" ? "Shoot or drag balls to place them" : eight ? eightTargetText() : `Target ball ${lowestBall()?.number ?? "—"}`);
+      : turnNotice || (mode === "trick" ? "Shoot or drag balls to place them" : snooker ? snookerTargetText() : eight ? eightTargetText() : `Target ball ${lowestBall()?.number ?? "—"}`);
     const isHumanTurn = mode === "pvp" || currentPlayer === 0;
     const canCallPushOut = postBreakPushOutAvailable && !moving && !gameOver && !ballInHand && !eight
       && !pushOutAwaitingChoice && isHumanTurn && mode !== "timer" && mode !== "trick";
@@ -397,12 +497,30 @@
 
   function legalTargets(player, ballList = balls) {
     const objectBalls = ballList.filter((ball) => ball.number > 0 && ball.active);
+    if (isSnooker()) {
+      if (snookerPhase === "red") {
+        const reds = objectBalls.filter((ball) => isRed(ball.number));
+        if (reds.length > 0) return reds;
+      }
+      const colours = objectBalls.filter((ball) => !isRed(ball.number)).sort((a, b) => a.number - b.number);
+      if (snookerPhase === "sequence") return colours.slice(0, 1);
+      return colours;
+    }
     if (!isEightBall()) {
       const lowest = objectBalls.sort((a, b) => a.number - b.number)[0];
       return lowest ? [lowest] : [];
     }
     const own = groups[player] ? objectBalls.filter((ball) => groupOf(ball.number) === groups[player]) : objectBalls.filter((ball) => ball.number !== 8);
     return own.length > 0 ? own : objectBalls.filter((ball) => ball.number === 8);
+  }
+
+  function snookerTargetText() {
+    const targets = legalTargets(currentPlayer);
+    const prefix = snookerBreak > 0 ? `Break ${snookerBreak} · ` : "";
+    if (targets.length === 0) return "No ball on";
+    if (targets.every((ball) => isRed(ball.number))) return `${prefix}Red on`;
+    if (snookerPhase === "sequence") return `${prefix}${SNOOKER_NAMES[targets[0].number]} on`;
+    return `${prefix}Colour on — hit the colour you want to pot first`;
   }
 
   function eightTargetText() {
@@ -489,7 +607,8 @@
       const pullX = pullStart.x - point.x;
       const pullY = pullStart.y - point.y;
       if (aimFromPull && Math.hypot(pullX, pullY) > 1) {
-        aimAngle = Math.atan2(pullY, pullX);
+        aimGoal = Math.atan2(pullY, pullX);
+        aimAngle = aimEased = aimGoal;
       }
       const projected = pullX * Math.cos(aimAngle) + pullY * Math.sin(aimAngle);
       pullDistance = clamp(projected, 0, MAX_PULL);
@@ -504,7 +623,24 @@
   function setAimFromPoint(point) {
     const offsetX = point.x - cueBall.x;
     const offsetY = point.y - cueBall.y;
-    if (Math.hypot(offsetX, offsetY) > 1) aimAngle = Math.atan2(offsetY, offsetX);
+    if (Math.hypot(offsetX, offsetY) > 1) {
+      if (aimGoal === null) aimEased = aimAngle;
+      aimGoal = Math.atan2(offsetY, offsetX);
+    }
+  }
+
+  // Eases the visible aim toward the pointer angle; external writes to aimAngle (AI, keys) win.
+  function easeAim(dt) {
+    if (aimGoal === null) return;
+    if (aimAngle !== aimEased) {
+      aimGoal = null;
+      aimEased = aimAngle;
+      return;
+    }
+    let diff = aimGoal - aimAngle;
+    diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+    aimAngle = Math.abs(diff) < .0002 ? aimGoal : aimAngle + diff * (1 - Math.exp(-dt * 40));
+    aimEased = aimAngle;
   }
 
   function adjustAim(x, y) {
@@ -545,6 +681,7 @@
     draggingCue = false;
     aimFromPull = false;
     canvas.closest(".table-frame").classList.remove("is-pulling");
+    if (aimGoal !== null && aimAngle === aimEased) aimAngle = aimEased = aimGoal;
     if (pullDistance > 1) shoot(pullDistance, aimAngle);
     pullDistance = 0;
     setPowerMeter(0);
@@ -562,10 +699,23 @@
     updateUI();
   }
 
-  function isCuePlacementValid(x, y) {
+  function isSpotFree(x, y, ignore = null, gap = 2) {
     if (x < TABLE.left + BALL_R || x > TABLE.right - BALL_R
       || y < TABLE.top + BALL_R || y > TABLE.bottom - BALL_R) return false;
-    if (breakPending && mode !== "trick" && x > BAULK_LINE_X - BALL_R) return false;
+    if (pockets.some((pocket) => Math.hypot(x - pocket.x, y - pocket.y) < pocketCaptureRadius(pocket))) return false;
+    return balls.every((ball) => ball === cueBall || ball === ignore || !ball.active || Math.hypot(x - ball.x, y - ball.y) >= BALL_R * 2 + gap);
+  }
+
+  function isInsideD(x, y) {
+    const centre = snookerSpots[18];
+    return x <= BAULK_LINE_X && Math.hypot(x - centre.x, y - centre.y) <= SNOOKER_D_RADIUS;
+  }
+
+  function isCuePlacementValid(x, y) {
+    if (isSnooker() && ballInHand && !isInsideD(x, y)) return false;
+    if (x < TABLE.left + BALL_R || x > TABLE.right - BALL_R
+      || y < TABLE.top + BALL_R || y > TABLE.bottom - BALL_R) return false;
+    if (breakPending && mode !== "trick" && !isSnooker() && x > BAULK_LINE_X - BALL_R) return false;
     if (pockets.some((pocket) => Math.hypot(x - pocket.x, y - pocket.y) < pocketCaptureRadius(pocket))) return false;
     return balls.every((ball) => ball === cueBall || !ball.active || Math.hypot(x - ball.x, y - ball.y) >= BALL_R * 2 + 2);
   }
@@ -574,7 +724,9 @@
     const x = clamp(point.x, TABLE.left + BALL_R, TABLE.right - BALL_R);
     const y = clamp(point.y, TABLE.top + BALL_R, TABLE.bottom - BALL_R);
     if (!isCuePlacementValid(x, y)) {
-      turnNotice = breakPending && mode !== "trick" && x > BAULK_LINE_X - BALL_R
+      turnNotice = isSnooker() && !isInsideD(x, y)
+        ? "Place the cue ball inside the D"
+        : breakPending && mode !== "trick" && x > BAULK_LINE_X - BALL_R
         ? "Place the cue ball behind the baulk line for the break"
         : "Choose a clear spot away from the balls and pockets";
       updateUI();
@@ -732,6 +884,12 @@
   }
 
   function constrainBallToTable(ball) {
+    // Let fast balls run into a pocket mouth instead of rebounding off the cushion in front of it.
+    if (tableIsSnooker && pockets.some((pocket) => {
+      const dx = pocket.x - ball.x;
+      const dy = pocket.y - ball.y;
+      return Math.hypot(dx, dy) < pocketCaptureRadius(pocket) + BALL_R * .75 && ball.vx * dx + ball.vy * dy > 0;
+    })) return;
     const left = TABLE.left + BALL_R;
     const right = TABLE.right - BALL_R;
     const top = TABLE.top + BALL_R;
@@ -849,6 +1007,12 @@
       ball.active = false;
       return;
     }
+    if (isSnooker()) {
+      pocketedThisShot.push(ball.number);
+      ballsPocketedThisShot = true;
+      lastShotPocketed = true;
+      return;
+    }
     if (isEightBall()) {
       pocketedThisShot.push(ball.number);
       ballsPocketedThisShot = true;
@@ -870,11 +1034,11 @@
   function respotBall(number, spot) {
     const nineBall = balls.find((ball) => ball.number === number);
     if (!nineBall) return;
-    let position = isCuePlacementValid(spot.x, spot.y) ? spot : null;
+    let position = (isSnooker() ? isSpotFree(spot.x, spot.y, null, 0) : isCuePlacementValid(spot.x, spot.y)) ? spot : null;
     for (let radius = BALL_R * 2; !position && radius < TABLE.right - TABLE.left; radius += BALL_R) {
       for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 12) {
         const candidate = { x: spot.x + Math.cos(angle) * radius, y: spot.y + Math.sin(angle) * radius };
-        if (isCuePlacementValid(candidate.x, candidate.y)) {
+        if (isSnooker() ? isSpotFree(candidate.x, candidate.y, null, 0) : isCuePlacementValid(candidate.x, candidate.y)) {
           position = candidate;
           break;
         }
@@ -891,6 +1055,110 @@
     separateFromNeighbors(nineBall);
   }
 
+  function judgeSnookerShot({ phase, targets, firstHit, pocketed, scratch, redsBefore }) {
+    const redsPotted = pocketed.filter(isRed).length;
+    const redsLeft = redsBefore - redsPotted;
+    const coloursPotted = pocketed.filter((number) => !isRed(number));
+    const illegal = [];
+    let foul = scratch || firstHit === null || !targets.includes(firstHit);
+    if (phase === "red") illegal.push(...coloursPotted);
+    else if (phase === "colour") {
+      illegal.push(...pocketed.filter(isRed));
+      const first = coloursPotted.length === 1 && coloursPotted[0] === firstHit;
+      if (!first) illegal.push(...coloursPotted);
+    } else illegal.push(...pocketed.filter((number) => number !== targets[0]));
+    if (illegal.length > 0) foul = true;
+    let foulPoints = 0;
+    if (foul) {
+      foulPoints = Math.max(4, firstHit ? snookerValue(firstHit) : 0, ...illegal.map(snookerValue));
+    }
+    const points = foul ? 0 : pocketed.reduce((sum, number) => sum + snookerValue(number), 0);
+    let nextPhase = phase;
+    if (phase === "red") {
+      if (!foul && redsPotted > 0) nextPhase = "colour";
+    } else if (phase === "colour") {
+      nextPhase = redsLeft > 0 ? "red" : "sequence";
+    }
+    if (nextPhase === "red" && redsLeft === 0) nextPhase = "sequence";
+    const respot = phase === "sequence" && !foul ? [] : coloursPotted;
+    return { foul, foulPoints, points, nextPhase, respot, redsLeft, keepsTurn: !foul && pocketed.length > 0 };
+  }
+
+  function respotSnookerColour(number) {
+    const order = [number, ...[21, 20, 19, 18, 17, 16].filter((n) => n !== number)];
+    for (const candidate of order) {
+      const spot = snookerSpots[candidate];
+      if (isSpotFree(spot.x, spot.y, null, 0)) {
+        respotBall(number, spot);
+        return;
+      }
+    }
+    respotBall(number, snookerSpots[number]);
+  }
+
+  function finishSnookerTurn() {
+    moving = false;
+    const shooter = currentPlayer;
+    const opponent = 1 - shooter;
+    const scratch = !cueBall.active;
+    const redsBefore = balls.filter((ball) => isRed(ball.number) && (ball.active || pocketedThisShot.includes(ball.number))).length;
+    const result = judgeSnookerShot({
+      phase: snookerPhase,
+      targets: shotTargetNumbers,
+      firstHit: firstHitNumber,
+      pocketed: pocketedThisShot,
+      scratch,
+      redsBefore
+    });
+    breakPending = false;
+    ballInHand = false;
+    turnNotice = "";
+    snookerPhase = result.nextPhase;
+    result.respot.forEach(respotSnookerColour);
+
+    if (result.foul) {
+      scores[opponent] += result.foulPoints;
+      snookerBreak = 0;
+      currentPlayer = opponent;
+      if (scratch) {
+        ballInHand = true;
+        placementPoint = { x: BAULK_LINE_X - SNOOKER_D_RADIUS / 2, y: snookerSpots[18].y };
+      }
+      turnNotice = `Foul — ${result.foulPoints} to Player ${opponent + 1}`
+        + (scratch ? " · cue ball in hand in the D" : "");
+    } else if (result.keepsTurn) {
+      scores[shooter] += result.points;
+      snookerBreak += result.points;
+    } else {
+      snookerBreak = 0;
+      currentPlayer = opponent;
+      turnNotice = "No ball potted — change of turn";
+    }
+
+    const remaining = balls.some((ball) => ball.number > 0 && ball.active);
+    if (!remaining) {
+      if (scores[0] === scores[1]) {
+        respotSnookerColour(21);
+        snookerPhase = "sequence";
+        currentPlayer = Math.random() < .5 ? 0 : 1;
+        ballInHand = true;
+        placementPoint = { x: BAULK_LINE_X - SNOOKER_D_RADIUS / 2, y: snookerSpots[18].y };
+        turnNotice = "Tied — black ball respotted";
+      } else {
+        const winner = scores[0] > scores[1] ? 0 : 1;
+        gameOver = true;
+        ballInHand = false;
+        if (mode === "ai") lastWinnerByVariant[variant] = winner;
+        els.canvasMessage.innerHTML = `<span>PLAYER ${winner + 1} WINS THE FRAME ${scores[winner]}–${scores[1 - winner]}</span>`;
+        turnNotice = "Frame over";
+      }
+    }
+    shotWasPushOut = false;
+    lastShotPocketed = false;
+    updateUI();
+    if (mode === "ai" && currentPlayer === 1 && !gameOver) scheduleAiShot();
+  }
+
   function respotCue() {
     cueBall.active = true;
     cueBall.vx = 0;
@@ -903,6 +1171,10 @@
   }
 
   function finishTurn() {
+    if (isSnooker()) {
+      finishSnookerTurn();
+      return;
+    }
     if (isEightBall()) {
       finishEightBallTurn();
       return;
@@ -1120,7 +1392,7 @@
       const objectDirection = { x: objectX / objectDistance, y: objectY / objectDistance };
       const pocketMiss = Math.abs((pocket.x - target.x) * objectDirection.y - (pocket.y - target.y) * objectDirection.x);
       const objectClearance = segmentClearance(target, objectDirection, objectDistance, objectBalls);
-      if (pocketMiss > pocket.radius - BALL_R - 2 || objectClearance < 4) continue;
+      if (pocketMiss > pocketAimTolerance(pocket) || objectClearance < 4) continue;
 
       const ghost = {
         x: target.x - objectDirection.x * BALL_R * 2,
@@ -1545,7 +1817,7 @@
         const ghostY = target.y - direction.y * BALL_R * 2;
         const onTable = ghostX >= TABLE.left + BALL_R && ghostX <= TABLE.right - BALL_R
           && ghostY >= TABLE.top + BALL_R && ghostY <= TABLE.bottom - BALL_R;
-        if (pocketMiss > pocket.radius - BALL_R - 2 || clearance < 4 || !onTable) continue;
+        if (pocketMiss > pocketAimTolerance(pocket) || clearance < 4 || !onTable) continue;
         cost = Math.min(cost, objectDistance + pocketMiss * 5 + 110 / (clearance + 5));
       }
       return { target, cost };
@@ -1665,9 +1937,99 @@
     return chosen.shot;
   }
 
+  function snookerBestShot(targets) {
+    const redsBefore = balls.filter((ball) => isRed(ball.number) && ball.active).length;
+    const numbers = targets.map((target) => target.number);
+    const rate = (angle, power) => {
+      const sim = simulateShot(angle, power);
+      const result = judgeSnookerShot({
+        phase: snookerPhase, targets: numbers, firstHit: sim.firstHit, pocketed: sim.pocketed, scratch: sim.scratch, redsBefore
+      });
+      return result.foul ? -result.foulPoints * 1.5 : result.points + (result.keepsTurn ? 1.5 : 0);
+    };
+    const ordered = [...targets].sort((a, b) => Math.hypot(a.x - cueBall.x, a.y - cueBall.y) - Math.hypot(b.x - cueBall.x, b.y - cueBall.y));
+    let best = null;
+    for (const target of ordered.slice(0, 8)) {
+      for (const candidate of aiShotCandidates(target).slice(0, 2)) {
+        const power = aiPowerFor(candidate);
+        const score = rate(candidate.angle, power) + (isRed(target.number) ? 0 : snookerValue(target.number) * .2);
+        if (!best || score > best.score) best = { angle: candidate.angle, power, score, target };
+      }
+    }
+    if (!best || best.score <= 0) {
+      const target = ordered[0];
+      const angle = Math.atan2(target.y - cueBall.y, target.x - cueBall.x);
+      for (const power of [16, 28, 42]) {
+        const score = rate(angle, power);
+        if (!best || score > best.score) best = { angle, power, score, target };
+      }
+    }
+    return best;
+  }
+
+  function planAiSnooker(targets) {
+    cueBall.active = true;
+    const centre = snookerSpots[18];
+    if (!ballInHand) return snookerBestShot(targets);
+    const breaking = breakPending;
+    let chosen = null;
+    for (let attempt = 0; attempt < (breaking ? 30 : 14); attempt += 1) {
+      const radius = SNOOKER_D_RADIUS * Math.sqrt(Math.random()) * .95;
+      const theta = Math.PI / 2 + Math.random() * Math.PI;
+      const x = centre.x + Math.cos(theta) * radius;
+      const y = centre.y + Math.sin(theta) * radius;
+      if (!isCuePlacementValid(x, y)) continue;
+      cueBall.x = x;
+      cueBall.y = y;
+      cueBall.vx = 0;
+      cueBall.vy = 0;
+      let shot;
+      if (breaking) {
+        const apex = targets.reduce((nearest, ball) => (ball.x < nearest.x ? ball : nearest), targets[0]);
+        const angle = Math.atan2(apex.y - y, apex.x - x);
+        const power = MAX_PULL * [.4, .55, .7][Math.floor(Math.random() * 3)];
+        const sim = simulateShot(angle, power);
+        if (sim.scratch || !targets.some((target) => target.number === sim.firstHit)) continue;
+        shot = { angle, power, score: 0 };
+      } else {
+        shot = snookerBestShot(targets);
+      }
+      if (!chosen || shot.score > chosen.shot.score) chosen = { x, y, shot };
+      if (breaking) break;
+    }
+    if (!chosen) {
+      const x = BAULK_LINE_X - SNOOKER_D_RADIUS / 2;
+      cueBall.x = x;
+      cueBall.y = centre.y;
+      cueBall.vx = 0;
+      cueBall.vy = 0;
+      chosen = { x, y: centre.y, shot: snookerBestShot(targets) };
+    }
+    cueBall.x = chosen.x;
+    cueBall.y = chosen.y;
+    placementPoint = { x: chosen.x, y: chosen.y };
+    return chosen.shot;
+  }
+
   function scheduleAiShot() {
     const targets = legalTargets(1);
     if (targets.length === 0) return;
+    if (isSnooker()) {
+      const shot = planAiSnooker(targets);
+      ballInHand = false;
+      if (!shot) return;
+      const noise = [.03, .014, .006][Math.min(aiDifficulty, 3) - 1] ?? .01;
+      shot.angle += (Math.random() - .5) * noise;
+      aimAngle = shot.angle;
+      turnNotice = "The house is lining it up…";
+      updateUI();
+      aiTimeout = window.setTimeout(() => {
+        if (mode !== "ai" || currentPlayer !== 1 || gameOver) return;
+        turnNotice = "";
+        shoot(shot.power, shot.angle, { x: 0, y: 0 });
+      }, 850);
+      return;
+    }
     const isBreak = breakPending && ballInHand;
     let shot = isBreak
       ? planAiBreak(targets)
@@ -1702,9 +2064,12 @@
     wood.addColorStop(.5, "#84502a");
     wood.addColorStop(.88, "#61391f");
     wood.addColorStop(1, "#a16b39");
-    roundedRect(18, 18, 964, 554, 17, wood);
+    const frame = tableIsSnooker
+      ? { x: TABLE.left - 30, y: TABLE.top - 30, w: TABLE.right - TABLE.left + 60, h: TABLE.bottom - TABLE.top + 60 }
+      : { x: 18, y: 18, w: 964, h: 554 };
+    roundedRect(frame.x, frame.y, frame.w, frame.h, 17, wood);
     ctx.save();
-    roundedPath(22, 22, 956, 546, 14);
+    roundedPath(frame.x + 4, frame.y + 4, frame.w - 8, frame.h - 8, 14);
     ctx.clip();
     for (let i = 0; i < 26; i += 1) {
       const y = 24 + i * 21;
@@ -1717,18 +2082,49 @@
     }
     ctx.restore();
 
-    roundedRect(43, 43, 914, 504, 15, "#33271c");
+    if (!tableIsSnooker) roundedRect(43, 43, 914, 504, 15, "#33271c");
     const cushion = ctx.createLinearGradient(0, 46, 0, 76);
     cushion.addColorStop(0, "#214a32");
     cushion.addColorStop(.55, "#163e2b");
     cushion.addColorStop(1, "#0e2e20");
-    roundedRect(58, 58, 884, 474, 11, cushion);
-    roundedRect(TABLE.left - 4, TABLE.top - 4, TABLE.right - TABLE.left + 8, TABLE.bottom - TABLE.top + 8, 8, felt);
-    if (ballInHand && breakPending) {
+    if (tableIsSnooker) {
+      roundedRect(TABLE.left - 20, TABLE.top - 20, TABLE.right - TABLE.left + 40, TABLE.bottom - TABLE.top + 40, 9, "#33271c");
+      roundedRect(TABLE.left - 10, TABLE.top - 10, TABLE.right - TABLE.left + 20, TABLE.bottom - TABLE.top + 20, 6, cushion);
+    } else {
+      roundedRect(58, 58, 884, 474, 11, cushion);
+    }
+    roundedRect(TABLE.left - 4, TABLE.top - 4, TABLE.right - TABLE.left + 8, TABLE.bottom - TABLE.top + 8, 8, tableIsSnooker ? snookerFelt : felt);
+    if (tableIsSnooker) {
+      const centre = snookerSpots[18];
+      if (ballInHand) {
+        ctx.fillStyle = "rgba(201,243,106,.12)";
+        ctx.beginPath();
+        ctx.arc(centre.x, centre.y, SNOOKER_D_RADIUS, Math.PI / 2, Math.PI * 1.5);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.strokeStyle = "rgba(235,245,225,.7)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(BAULK_LINE_X, TABLE.top);
+      ctx.lineTo(BAULK_LINE_X, TABLE.bottom);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(centre.x, centre.y, SNOOKER_D_RADIUS, Math.PI / 2, Math.PI * 1.5);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(235,245,225,.8)";
+      for (const number of [16, 17, 18, 19, 20, 21]) {
+        ctx.beginPath();
+        ctx.arc(snookerSpots[number].x, snookerSpots[number].y, 1.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    if (!tableIsSnooker && ballInHand && breakPending) {
       ctx.fillStyle = "rgba(201,243,106,.06)";
       ctx.fillRect(TABLE.left + 4, TABLE.top + 4, BAULK_LINE_X - BALL_R - TABLE.left - 4, TABLE.bottom - TABLE.top - 8);
     }
 
+    if (!tableIsSnooker) {
     ctx.strokeStyle = "rgba(221,239,205,.11)";
     ctx.lineWidth = 1;
     ctx.setLineDash([5, 8]);
@@ -1744,11 +2140,13 @@
       ctx.beginPath(); ctx.arc(x, 527, 1.7, 0, Math.PI * 2); ctx.fill();
     }
     ctx.beginPath(); ctx.arc(BAULK_LINE_X, 295, 2.3, 0, Math.PI * 2); ctx.fill();
+    }
 
     drawPockets();
     const canAim = !gameOver && cueBall.active && !moving && !draggedBall && !ballInHand;
     if (canAim && aimGuideOn) drawAimGuide({ x: Math.cos(aimAngle), y: Math.sin(aimAngle) });
     drawBalls();
+    drawSnookerHighlights(canAim);
     if (canAim && (Number(els.spinEnglish.value) !== 0 || Number(els.spinFollow.value) !== 0)) drawSpinMarker();
     const canPlaceCueBall = mode !== "ai" || currentPlayer === 0;
     if (ballInHand && canPlaceCueBall && placementPoint.x >= TABLE.left && placementPoint.x <= TABLE.right
@@ -1761,7 +2159,7 @@
       ctx.font = "10px 'DM Mono', monospace";
       ctx.textAlign = "center";
       ctx.fillText(
-        breakPending
+        isSnooker() ? "CLICK INSIDE THE D TO PLACE" : breakPending
           ? "BREAK SETUP · CLICK BEHIND BAULK LINE TO PLACE"
           : cueBall.active ? "CLICK OPEN SPOT TO MOVE · CLICK CUE TO SHOOT FROM HERE" : "CLICK TO PLACE CUE BALL",
         placementPoint.x,
@@ -1774,6 +2172,14 @@
   }
 
   function drawPockets() {
+    ctx.save();
+    if (tableIsSnooker) {
+      // Keep pocket rings off the playing surface.
+      ctx.beginPath();
+      ctx.rect(0, 0, W, H);
+      ctx.rect(TABLE.left - 4, TABLE.top - 4, TABLE.right - TABLE.left + 8, TABLE.bottom - TABLE.top + 8);
+      ctx.clip("evenodd");
+    }
     for (const pocket of pockets) {
       const shadow = ctx.createRadialGradient(pocket.x, pocket.y, 3, pocket.x, pocket.y, pocket.radius + 9);
       shadow.addColorStop(0, "#030605");
@@ -1789,6 +2195,34 @@
       ctx.arc(pocket.x, pocket.y, pocket.radius + 1, 0, Math.PI * 2);
       ctx.stroke();
     }
+    ctx.restore();
+    if (tableIsSnooker) {
+      for (const pocket of pockets) {
+        ctx.fillStyle = "#030605";
+        ctx.beginPath();
+        ctx.arc(pocket.x, pocket.y, pocket.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  function snookerHighlightTargets() {
+    if (!isSnooker() || gameOver || balls.some((ball) => ball.active && isRed(ball.number))) return [];
+    return legalTargets(currentPlayer);
+  }
+
+  function drawSnookerHighlights(canAim) {
+    if (!canAim) return;
+    const pulse = .5 + .5 * Math.sin(performance.now() / 260);
+    ctx.save();
+    ctx.strokeStyle = `rgba(190,240,110,${.55 + .4 * pulse})`;
+    ctx.lineWidth = 2;
+    for (const ball of snookerHighlightTargets()) {
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, BALL_R + 3.5 + pulse * 1.5, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   function drawBalls() {
@@ -1834,6 +2268,35 @@
     ctx.shadowBlur = 0;
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 0;
+    if (number > 0 && isSnooker()) {
+      const colour = isRed(number) ? "#c8261f" : SNOOKER_COLORS[number];
+      const shade = ctx.createRadialGradient(x - BALL_R * .35, y - BALL_R * .4, BALL_R * .1, x, y, BALL_R);
+      shade.addColorStop(0, "rgba(255,255,255,.75)");
+      shade.addColorStop(.25, colour);
+      shade.addColorStop(1, "rgba(0,0,0,.55)");
+      ctx.fillStyle = colour;
+      ctx.beginPath();
+      ctx.arc(x, y, BALL_R, 0, Math.PI * 2);
+      ctx.fill();
+      if (ball.orient) {
+        // Marker spots rotate with the ball's orientation so rolling is visible.
+        ctx.fillStyle = number === 20 || number === 16 ? "rgba(60,30,20,.7)" : "rgba(255,255,255,.7)";
+        for (const axis of ball.orient) {
+          for (const sign of [1, -1]) {
+            if (axis[2] * sign < .1) continue;
+            ctx.beginPath();
+            ctx.ellipse(x + axis[0] * sign * BALL_R * .88, y + axis[1] * sign * BALL_R * .88, 1.3, 1.3 * axis[2] * sign, Math.atan2(axis[1], axis[0]), 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+      ctx.fillStyle = shade;
+      ctx.beginPath();
+      ctx.arc(x, y, BALL_R, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
     if (number > 0) {
       ctx.save();
       ctx.beginPath();
@@ -1932,12 +2395,13 @@
   function drawCue() {
     const direction = { x: Math.cos(aimAngle), y: Math.sin(aimAngle) };
     const normal = { x: -direction.y, y: direction.x };
-    const tipDistance = 17 + pullDistance;
+    const tipDistance = BALL_R + 3 + pullDistance;
     const buttDistance = 205 + pullDistance;
     const handleLength = 78;
-    const tipWidth = 5.6;
-    const connectWidth = 7;
-    const buttWidth = 10;
+    const widthScale = isSnooker() ? .7 : 1;
+    const tipWidth = 5.6 * widthScale;
+    const connectWidth = 7 * widthScale;
+    const buttWidth = 10 * widthScale;
     const at = (distance) => ({ x: cueBall.x - direction.x * distance, y: cueBall.y - direction.y * distance });
     const quad = (startDistance, endDistance, startWidth, endWidth) => {
       const a = at(startDistance);
@@ -2277,6 +2741,7 @@
     const dt = Math.min((now - lastTime) / 1000, .04);
     lastTime = now;
     if (moving) stepPhysics(dt);
+    easeAim(dt);
     if (mode === "timer" && !gameOver) {
       remainingSeconds = Math.max(0, remainingSeconds - dt);
       if (remainingSeconds === 0) {

@@ -155,6 +155,7 @@ h2 { margin: 0; font: 600 17px var(--display); letter-spacing: -.035em; }
 .tracker-ball.stripe::before { position: absolute; inset: 6px 0; border-radius: 50%; background: #f5f2e9; content: ""; }
 .tracker-ball span { z-index: 1; display: grid; width: 9px; height: 9px; place-items: center; border-radius: 50%; background: #f6f3ec; font-size: 6px; }
 .tracker-ball.pocketed { opacity: .19; filter: grayscale(1); }
+.tracker-ball.on { box-shadow: 0 0 0 2px #bef06e, 0 0 8px 2px rgba(190,240,110,.6); }
 .ball-tracker .tracker-ball:nth-child(8) { color: white; }
 
 .pushout-controls { padding: 10px; border: 1px solid rgba(201,243,106,.2); border-radius: 3px; background: rgba(201,243,106,.045); }
@@ -223,3 +224,6 @@ h2 { margin: 0; font: 600 17px var(--display); letter-spacing: -.035em; }
 .ball-tracker.wide { grid-template-columns: repeat(8, minmax(0, 1fr)); }
 .ball-tracker.ten { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .ball-tracker.wide .tracker-ball:nth-child(8) { color: white; }
+.ball-tracker.snooker { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+.ball-tracker.snooker .tracker-ball:nth-child(n) { color: #172019; }
+.ball-tracker.snooker .tracker-ball:nth-child(21) { color: white; }
