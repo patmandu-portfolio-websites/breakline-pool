@@ -53,7 +53,7 @@
   };
   const difficultyNames = { 1: "Rookie", 2: "Club player", 3: "Pro" };
   function hasTouchControls() {
-    return window.matchMedia("(pointer: coarse)").matches || navigator.maxTouchPoints > 0 || window.innerWidth <= 780;
+    return window.matchMedia("(pointer: coarse), (any-pointer: coarse), (hover: none)").matches || navigator.maxTouchPoints > 0 || window.innerWidth <= 1400;
   }
   const els = {
     modeButtons: [...document.querySelectorAll(".mode-button")],
@@ -127,6 +127,8 @@
   let cueBall;
   let aimAngle = 0;
   let aimGoal = null;
+  let spaceLocked = false;
+  let lastPointerPoint = null;
   let aimEased = 0;
   let aimFromPull = false;
   let draggingCue = false;
@@ -404,7 +406,7 @@
     els.helpHeading.textContent = mode === "trick" ? "FREE PLAY" : mode === "timer" ? "RACE THE CLOCK" : "THE SHOT";
     els.helpCopy.textContent = mode === "trick"
       ? "Drag balls to place them. On touch screens, use the direction pad, power slider, and Shoot button. Set English or draw/follow spin below the table."
-      : "Aim with the pointer or touch direction pad; set power and shoot with the touch controls. English and draw/follow spin change the cue ball after ball and cushion contact.";
+      : "Aim with the pointer or touch direction pad; set power and shoot with the touch controls. On a keyboard, hold Space to lock the aim, move the pointer back to set power, then release Space to shoot. English and draw/follow spin change the cue ball after ball and cushion contact.";
     remainingSeconds = selectedMinutes() * 60;
     resetGame();
   }
@@ -547,8 +549,10 @@
   }
 
   function onPointerDown(event) {
+    if (spaceLocked) return;
     if (gameOver || moving || pushOutAwaitingChoice || (mode === "ai" && currentPlayer === 1)) return;
     const point = canvasPoint(event);
+    lastPointerPoint = point;
     if (ballInHand) {
       const clickingCueBall = cueBall.active
         && Math.hypot(point.x - cueBall.x, point.y - cueBall.y) <= BALL_R + 5;
@@ -590,6 +594,7 @@
 
   function onPointerMove(event) {
     const point = canvasPoint(event);
+    lastPointerPoint = point;
     if (touchAiming) {
       setAimFromPoint(point);
       return;
@@ -688,7 +693,30 @@
     if (!moving) updateUI();
   }
 
+  function lockShotWithKeyboard() {
+    if (spaceLocked || draggingCue || draggedBall || touchAiming || ballInHand || !cueBall.active) return false;
+    if (gameOver || moving || pushOutAwaitingChoice || (mode === "ai" && currentPlayer === 1)) return false;
+    if (aimGoal !== null && aimAngle === aimEased) aimAngle = aimEased = aimGoal;
+    spaceLocked = true;
+    aimFromPull = false;
+    draggingCue = true;
+    pullStart = lastPointerPoint ?? { x: cueBall.x, y: cueBall.y };
+    pullDistance = 0;
+    canvas.closest(".table-frame").classList.add("is-pulling");
+    els.canvasMessage.innerHTML = "";
+    els.statusDetail.textContent = "Aim locked — move back, then release Space to shoot";
+    setPowerMeter(0);
+    return true;
+  }
+
+  function releaseKeyboardShot() {
+    if (!spaceLocked) return;
+    spaceLocked = false;
+    onPointerUp();
+  }
+
   function cancelPointerInteraction() {
+    spaceLocked = false;
     draggedBall = null;
     touchAiming = false;
     draggingCue = false;
@@ -2764,6 +2792,25 @@
   canvas.addEventListener("dragstart", (event) => event.preventDefault());
   canvas.addEventListener("contextmenu", (event) => event.preventDefault());
   window.addEventListener("resize", updateUI);
+  window.addEventListener("keydown", (event) => {
+    if (event.code !== "Space" || event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.target.closest?.("input, select, textarea")) return;
+    if (lockShotWithKeyboard()) {
+      event.preventDefault();
+      if (event.target instanceof HTMLButtonElement) event.target.blur();
+    }
+  });
+  window.addEventListener("keyup", (event) => {
+    if (event.code !== "Space" || !spaceLocked) return;
+    event.preventDefault();
+    releaseKeyboardShot();
+  });
+  window.addEventListener("pointermove", (event) => {
+    if (spaceLocked && event.target !== canvas) onPointerMove(event);
+  });
+  window.addEventListener("blur", () => {
+    if (spaceLocked) cancelPointerInteraction();
+  });
   els.aimButtons.forEach((button) => button.addEventListener("click", () => {
     if (button.disabled) return;
     adjustAim(Number(button.dataset.aimX), Number(button.dataset.aimY));
