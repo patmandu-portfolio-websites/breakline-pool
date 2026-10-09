@@ -548,6 +548,8 @@
     return { x: (event.clientX - rect.left) * W / rect.width, y: (event.clientY - rect.top) * H / rect.height };
   }
 
+  let touchAimOffset = 0;
+
   function onPointerDown(event) {
     if (spaceLocked) return;
     if (gameOver || moving || pushOutAwaitingChoice || (mode === "ai" && currentPlayer === 1)) return;
@@ -576,6 +578,8 @@
     if (!cueBall.active) return;
     if (event.pointerType === "touch" && !isTouchOnCueStick(point)) {
       touchAiming = true;
+      const startAngle = Math.atan2(point.y - cueBall.y, point.x - cueBall.x);
+      touchAimOffset = (aimGoal ?? aimAngle) - startAngle;
       setAimFromPoint(point);
       canvas.setPointerCapture(event.pointerId);
       return;
@@ -630,7 +634,7 @@
     const offsetY = point.y - cueBall.y;
     if (Math.hypot(offsetX, offsetY) > 1) {
       if (aimGoal === null) aimEased = aimAngle;
-      aimGoal = Math.atan2(offsetY, offsetX);
+      aimGoal = Math.atan2(offsetY, offsetX) + (touchAiming ? touchAimOffset : 0);
     }
   }
 
