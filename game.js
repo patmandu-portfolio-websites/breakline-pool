@@ -16,7 +16,9 @@
   let SHOT_SPEED_PER_PULL = 14;
   let BAULK_LINE_X = 336;
   let tableIsSnooker = false;
-  const TABLE = { left: 73, right: 927, top: 73, bottom: 517 };
+  // Regulation 2:1 playing surface for pool (854 x 427).
+  const POOL_HALF_HEIGHT = 427 / 2;
+  const TABLE = { left: 73, right: 927, top: H / 2 - POOL_HALF_HEIGHT, bottom: H / 2 + POOL_HALF_HEIGHT };
   const pockets = [
     { x: 60, y: 60, radius: POCKET_R }, { x: 500, y: 56, radius: POCKET_R }, { x: 940, y: 60, radius: POCKET_R },
     { x: 60, y: 530, radius: POCKET_R }, { x: 500, y: 534, radius: POCKET_R }, { x: 940, y: 530, radius: POCKET_R }
@@ -51,7 +53,7 @@
     timer: ["Beat the clock", "Clear the table before time runs out. Every shot counts."],
     trick: ["Trick shot", "Arrange the balls anywhere, then shoot. Pocket balls any way you like."]
   };
-  const difficultyNames = { 1: "Rookie", 2: "Club player", 3: "Pro" };
+  const difficultyNames = { 1: "Rookie", 2: "Club player", 3: "Pro", 4: "Legend" };
   function hasTouchControls() {
     return window.matchMedia("(pointer: coarse), (any-pointer: coarse), (hover: none)").matches || navigator.maxTouchPoints > 0 || window.innerWidth <= 1400;
   }
@@ -143,7 +145,7 @@
   let remainingSeconds = 300;
   let lastTime = performance.now();
   let aiTimeout = null;
-  let soundOn = false;
+  let soundOn = true;
   let audioContext = null;
   let shotTargetNumber = null;
   let firstHitNumber = null;
@@ -238,8 +240,12 @@
       BALL_R = 14;
       SHOT_SPEED_PER_PULL = 14;
       BAULK_LINE_X = 336;
-      Object.assign(TABLE, { left: 73, right: 927, top: 73, bottom: 517 });
-      POOL_POCKETS.forEach((pocket) => pockets.push({ ...pocket }));
+      Object.assign(TABLE, { left: 73, right: 927, top: H / 2 - POOL_HALF_HEIGHT, bottom: H / 2 + POOL_HALF_HEIGHT });
+      POOL_POCKETS.forEach((pocket, index) => {
+        const side = index < 3 ? -1 : 1;
+        const out = index % 3 === 1 ? 17 : 13;
+        pockets.push({ ...pocket, y: H / 2 + side * (POOL_HALF_HEIGHT + out) });
+      });
       return;
     }
     BALL_R = SNOOKER_BALL_R;
@@ -532,7 +538,12 @@
   }
 
   function updateCpuName() {
-    els.playerTwoName.textContent = mode === "ai" ? `THE HOUSE · ${difficultyNames[aiDifficulty].toUpperCase()}` : "PLAYER TWO";
+    els.playerTwoName.textContent = mode === "ai" ? `THE HOUSE · ${difficultyLabel().toUpperCase()}` : "PLAYER TWO";
+  }
+
+  function difficultyLabel() {
+    if (aiDifficulty >= 4) return isSnooker() ? "Ronnie" : "Efren";
+    return difficultyNames[aiDifficulty];
   }
 
   function lowestBall() {
@@ -855,6 +866,95 @@
     }
   }
 
+  let roomBus = null;
+
+  // Large-room reverb: dry signal plus a convolver fed with a generated, exponentially decaying stereo impulse.
+  const ROOM = { decaySeconds: 1.8, wetLevel: .22, dryLevel: 1, preDelay: .018 };
+
+  function getRoomBus(ctx) {
+    if (roomBus?.context === ctx) return roomBus.input;
+    const input = ctx.createGain();
+    const dry = ctx.createGain();
+    dry.gain.value = ROOM.dryLevel;
+    input.connect(dry);
+    dry.connect(ctx.destination);
+
+    const length = Math.floor(ctx.sampleRate * ROOM.decaySeconds);
+    const impulse = ctx.createBuffer(2, length, ctx.sampleRate);
+    for (let channel = 0; channel < 2; channel += 1) {
+      const data = impulse.getChannelData(channel);
+      for (let i = 0; i < length; i += 1) data[i] = (Math.random() * 2 - 1) * Math.exp(-5 * i / length);
+    }
+    const convolver = ctx.createConvolver();
+    convolver.buffer = impulse;
+    const delay = ctx.createDelay(.1);
+    delay.delayTime.value = ROOM.preDelay;
+    const damping = ctx.createBiquadFilter();
+    damping.type = "lowpass";
+    damping.frequency.value = 5000;
+    const wet = ctx.createGain();
+    wet.gain.value = ROOM.wetLevel;
+    input.connect(delay);
+    delay.connect(convolver);
+    convolver.connect(damping);
+    damping.connect(wet);
+    wet.connect(ctx.destination);
+    roomBus = { context: ctx, input };
+    return input;
+  }
+
+  let lastImpactSoundTime = 0;
+
+  // Impact is 0..1 and scales the click volume with how hard the balls hit.
+  function playBallImpact(impactSpeed) {
+    if (!soundOn) return;
+    try {
+      audioContext ??= new AudioContext();
+      const ctx = audioContext;
+      const now = ctx.currentTime;
+      const out = getRoomBus(ctx);
+      if (now - lastImpactSoundTime < .012) return;
+      lastImpactSoundTime = now;
+      const impact = clamp(impactSpeed / (SHOT_SPEED_PER_PULL * MAX_PULL * .6), .05, 1);
+
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(2400, now);
+      osc.frequency.exponentialRampToValueAtTime(1100, now + 0.035);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.22 * impact, now + 0.001);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.055);
+      osc.connect(gain);
+      gain.connect(out);
+      osc.start(now);
+      osc.stop(now + 0.06);
+
+      const length = Math.floor(ctx.sampleRate * 0.025);
+      const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < length; i += 1) {
+        data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (length * 0.18));
+      }
+      const noise = ctx.createBufferSource();
+      noise.buffer = buffer;
+      const filter = ctx.createBiquadFilter();
+      filter.type = "bandpass";
+      filter.frequency.value = 4200;
+      filter.Q.value = 0.8;
+      const ng = ctx.createGain();
+      ng.gain.setValueAtTime(0.0001, now);
+      ng.gain.exponentialRampToValueAtTime(0.10 * impact, now + 0.001);
+      ng.gain.exponentialRampToValueAtTime(0.0001, now + 0.025);
+      noise.connect(filter);
+      filter.connect(ng);
+      ng.connect(out);
+      noise.start(now);
+    } catch (error) {
+      console.warn("Unable to play ball impact sound.", error);
+    }
+  }
+
   function stepPhysics(dt) {
     const fastestTravel = balls.reduce((maximum, ball) => ball.active
       ? Math.max(maximum, Math.hypot(ball.vx, ball.vy) * dt)
@@ -1022,7 +1122,7 @@
       cueBallInCollision.vy += incomingCueDirectionY * followVelocity;
       cueBallInCollision.spinY = 0;
     }
-    playTone(240, .035, .012);
+    playBallImpact(relativeVelocity);
   }
 
   function onPocket(ball) {
@@ -1412,6 +1512,37 @@
     return best ? { angle: best.angle, power: best.power, quality: 5000, target: targets[0] } : null;
   }
 
+  // Legend-level safety play: a legal, non-potting shot that leaves the opponent the hardest next shot.
+  function findSafetyShot(targets, isLegal) {
+    if (!cueBall.active || targets.length === 0) return null;
+    const degrees = Math.PI / 180;
+    const legal = [];
+    const tryShot = (angle, power) => {
+      const sim = simulateShot(angle, power);
+      if (sim.pocketed.length > 0 || !isLegal(sim)) return;
+      const others = sim.balls.filter((ball) => ball.active && ball.number > 0);
+      const cue = sim.balls.find((ball) => ball.number === 0);
+      const gap = Math.min(...others.map((ball) => Math.hypot(ball.x - cue.x, ball.y - cue.y)), 400);
+      legal.push({ angle, power, sim, rough: Math.min(gap, 200) / 10 - power * .05 });
+    };
+    for (let deg = 0; deg < 360; deg += 3) {
+      for (const power of [18, 30, 46, 70]) tryShot(deg * degrees, power);
+    }
+    if (legal.length === 0) return null;
+    legal.sort((a, b) => b.rough - a.rough);
+    let best = null;
+    for (const shot of legal.slice(0, 10)) {
+      const score = withSimulatedTable(shot.sim, () => {
+        const opponentTargets = legalTargets(0);
+        if (opponentTargets.length === 0) return 0;
+        const count = opponentTargets.reduce((total, target) => total + aiShotCandidates(target).length, 0);
+        return Math.min(chooseBestShot(opponentTargets).quality, 1000) / 20 - Math.min(count, 20) * .75;
+      }) - shot.power * .03;
+      if (!best || score > best.score) best = { angle: shot.angle, power: shot.power, score };
+    }
+    return best;
+  }
+
   function aiShotCandidates(target) {
     const objectBalls = balls.filter((ball) => ball.active && ball.number > 0 && ball !== target);
     const candidates = [];
@@ -1435,15 +1566,19 @@
 
       const approaches = findCueApproaches(ghost, objectDirection, objectBalls);
       for (const approach of approaches) {
+        const bankPenalty = (approach.banks || 0) * 28;
+        const cutPenalty = Math.max(0, 1 - Math.max(0, approach.approach)) * 180;
+        const forgiveness = approach.approach > .92 ? -65 : 0;
         candidates.push({
           angle: approach.angle,
-          distance: approach.cueDistance + objectDistance * .4 + (1 - approach.approach) * 210
-            + pocketMiss * 5 + 110 / (objectClearance + 5) + 75 / (approach.clearance + 5)
-            + (approach.banks || 0) * 22,
+          distance: approach.cueDistance + objectDistance * .35 + (1 - approach.approach) * 165
+            + pocketMiss * 4 + 90 / (objectClearance + 5) + 60 / (approach.clearance + 5)
+            + bankPenalty + cutPenalty + forgiveness,
           approach: approach.approach,
           cueDistance: approach.cueDistance,
           objectDistance,
-          pocket
+          pocket,
+          banks: approach.banks || 0
         });
       }
     }
@@ -1591,29 +1726,45 @@
     let ranked = [];
     for (const target of targets) ranked = ranked.concat(aiShotCandidates(target));
     ranked.sort((a, b) => a.distance - b.distance);
-    for (const shot of ranked.slice(0, expert ? 10 : 5)) {
+    for (const shot of ranked.slice(0, aiDifficulty >= 4 ? 30 : expert ? 12 : 6)) {
       const power = aiPowerFor(shot);
       addAttempt(shot.angle, power);
       if (expert) {
-        addAttempt(shot.angle, power * .8);
-        addAttempt(shot.angle, power * 1.25);
+        addAttempt(shot.angle, power * .9);
+        addAttempt(shot.angle, power * 1.08);
+      }
+      if (aiDifficulty >= 4) {
+        addAttempt(shot.angle + 0.4 * degrees, power * .98);
+        addAttempt(shot.angle - 0.4 * degrees, power * .98);
       }
     }
     for (const target of targets) {
       const direct = Math.atan2(target.y - cueBall.y, target.x - cueBall.x);
-      addAttempt(direct, 44);
-      addAttempt(direct, 80);
+      addAttempt(direct, 42);
+      addAttempt(direct, 52);
+      addAttempt(direct, 64);
+      addAttempt(direct, 78);
     }
 
     let best = null;
     const consider = (attempt) => {
-      const result = evaluateAiShot(attempt.angle, attempt.power, targets, expert);
+      const result = evaluateAiShot(attempt.angle, attempt.power, targets, true);
       if (!best || result.score > best.score) best = { ...attempt, score: result.score };
     };
     attempts.forEach(consider);
+
     if (best && best.score > 0) {
       const center = { ...best };
-      for (const offset of expert ? [-.6, -.3, .3, .6] : [-.35, .35]) consider({ angle: center.angle + offset * degrees, power: center.power });
+      const offsets = aiDifficulty >= 4 ? [-1.2, -0.9, -0.6, -0.38, -0.2, -0.1, 0.1, 0.2, 0.38, 0.6, 0.9, 1.2] : expert ? [-0.8, -0.45, -0.25, 0.25, 0.45, 0.8] : [-0.5, -0.25, 0.25, 0.5];
+      for (const offset of offsets) consider({ angle: center.angle + offset * degrees, power: center.power });
+      if (aiDifficulty >= 4) {
+        const fine = { ...best };
+        for (const offset of [-0.18, -0.09, -0.04, 0.04, 0.09, 0.18]) {
+          for (const scale of [0.92, 1, 1.08]) {
+            consider({ angle: fine.angle + offset * degrees, power: clamp(fine.power * scale, 14, MAX_PULL) });
+          }
+        }
+      }
     }
     if (!best || best.score <= -300) return findEscapeShot(targets) || baseShot;
     return { ...baseShot, angle: best.angle, power: best.power };
@@ -1981,8 +2132,9 @@
     };
     const ordered = [...targets].sort((a, b) => Math.hypot(a.x - cueBall.x, a.y - cueBall.y) - Math.hypot(b.x - cueBall.x, b.y - cueBall.y));
     let best = null;
-    for (const target of ordered.slice(0, 8)) {
-      for (const candidate of aiShotCandidates(target).slice(0, 2)) {
+    const legend = aiDifficulty >= 4;
+    for (const target of ordered.slice(0, legend ? 12 : 8)) {
+      for (const candidate of aiShotCandidates(target).slice(0, legend ? 4 : 2)) {
         const power = aiPowerFor(candidate);
         const score = rate(candidate.angle, power) + (isRed(target.number) ? 0 : snookerValue(target.number) * .2);
         if (!best || score > best.score) best = { angle: candidate.angle, power, score, target };
@@ -1995,6 +2147,23 @@
         const score = rate(angle, power);
         if (!best || score > best.score) best = { angle, power, score, target };
       }
+    }
+    if (legend && best) {
+      const centre = { ...best };
+      for (const offset of [-.4, -.2, .2, .4]) {
+        for (const scale of [.94, 1, 1.06]) {
+          const power = clamp(centre.power * scale, 14, MAX_PULL);
+          const angle = centre.angle + offset * Math.PI / 180;
+          const score = rate(angle, power) + (isRed(centre.target.number) ? 0 : snookerValue(centre.target.number) * .2);
+          if (score > best.score + .01) best = { ...best, angle, power, score };
+        }
+      }
+    }
+    if (legend && best && best.score < 2) {
+      const safe = findSafetyShot(targets, (sim) => !judgeSnookerShot({
+        phase: snookerPhase, targets: numbers, firstHit: sim.firstHit, pocketed: sim.pocketed, scratch: sim.scratch, redsBefore
+      }).foul);
+      if (safe) best = { ...best, angle: safe.angle, power: safe.power, score: 1, safety: true };
     }
     return best;
   }
@@ -2050,7 +2219,7 @@
       const shot = planAiSnooker(targets);
       ballInHand = false;
       if (!shot) return;
-      const noise = [.03, .014, .006][Math.min(aiDifficulty, 3) - 1] ?? .01;
+      const noise = [.03, .016, .012, 0][Math.min(aiDifficulty, 4) - 1] ?? .01;
       shot.angle += (Math.random() - .5) * noise;
       aimAngle = shot.angle;
       turnNotice = "The house is lining it up…";
@@ -2073,7 +2242,14 @@
     if (!isBreak && shot && shot.quality >= 10000) shot = findEscapeShot(targets) || shot;
     ballInHand = false;
     if (!shot) return;
-    if (!isBreak && aiDifficulty > 1 && shot.quality < 5000) shot = refineAiShot(shot, targets);
+    if (!isBreak && aiDifficulty > 1 && shot.quality < (aiDifficulty >= 4 ? 10000 : 5000)) shot = refineAiShot(shot, targets);
+    if (!isBreak && aiDifficulty >= 4 && cueBall.active && evaluateAiShot(shot.angle, shot.power, targets, false).score < 100) {
+      const safe = findSafetyShot(targets, (sim) => {
+        const outcome = scoreAiOutcome(sim, targets);
+        return outcome.score > -300 && sim.railAfterContact;
+      });
+      if (safe) shot = { ...shot, angle: safe.angle, power: safe.power };
+    }
     if (cueBall.active) shot = ensureShotHitsTarget(shot, targets);
     aimAngle = shot.angle;
     turnNotice = "The house is lining it up…";
@@ -2085,36 +2261,81 @@
     }, 850);
   }
 
-  function drawTable() {
-    ctx.clearRect(0, 0, W, H);
+  // Deep mahogany rails: fine grain running along each rail, plus a soft varnish shine.
+  function drawRailGrain(frame) {
+    const inset = tableIsSnooker ? 20 : 30;
+    const inner = { x: TABLE.left - inset, y: TABLE.top - inset, w: TABLE.right - TABLE.left + inset * 2, h: TABLE.bottom - TABLE.top + inset * 2 };
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(frame.x, frame.y, frame.w, frame.h);
+    ctx.rect(inner.x, inner.y, inner.w, inner.h);
+    ctx.clip("evenodd");
+    let seed = 7;
+    const rand = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    const bands = [
+      { x: frame.x, y: frame.y, w: frame.w, h: inner.y - frame.y, horizontal: true },
+      { x: frame.x, y: inner.y + inner.h, w: frame.w, h: frame.y + frame.h - inner.y - inner.h, horizontal: true },
+      { x: frame.x, y: inner.y, w: inner.x - frame.x, h: inner.h, horizontal: false },
+      { x: inner.x + inner.w, y: inner.y, w: frame.x + frame.w - inner.x - inner.w, h: inner.h, horizontal: false }
+    ];
+    for (const band of bands) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(band.x, band.y, band.w, band.h);
+      ctx.clip();
+      const length = band.horizontal ? band.w : band.h;
+      const across = band.horizontal ? band.h : band.w;
+      for (let offset = 1; offset < across; offset += 1.4 + rand() * 2.2) {
+        const dark = rand() > .35;
+        ctx.strokeStyle = dark ? `rgba(28,6,4,${.16 + rand() * .22})` : `rgba(205,110,85,${.05 + rand() * .09})`;
+        ctx.lineWidth = .5 + rand() * 1.1;
+        const drift = (rand() - .5) * 3;
+        ctx.beginPath();
+        for (let step = 0; step <= 8; step += 1) {
+          const along = length * step / 8;
+          const wobble = Math.sin(step * 1.3 + offset) * .6 + drift * step / 8;
+          if (band.horizontal) ctx[step ? "lineTo" : "moveTo"](band.x + along, band.y + offset + wobble);
+          else ctx[step ? "lineTo" : "moveTo"](band.x + offset + wobble, band.y + along);
+        }
+        ctx.stroke();
+      }
+      const outerFirst = band.horizontal ? band.y === frame.y : band.x === frame.x;
+      const a = band.horizontal ? band.y : band.x;
+      const size = band.horizontal ? band.h : band.w;
+      const from = outerFirst ? a : a + size;
+      const to = outerFirst ? a + size * .45 : a + size * .55;
+      const shine = band.horizontal ? ctx.createLinearGradient(0, from, 0, to) : ctx.createLinearGradient(from, 0, to, 0);
+      shine.addColorStop(0, tableIsSnooker ? "rgba(255,225,205,.34)" : "rgba(255,225,205,.42)");
+      shine.addColorStop(.5, tableIsSnooker ? "rgba(255,225,205,.08)" : "rgba(255,225,205,.1)");
+      shine.addColorStop(1, "rgba(255,225,205,0)");
+      ctx.fillStyle = shine;
+      ctx.fillRect(band.x, band.y, band.w, band.h);      ctx.restore();
+    }
+    ctx.restore();
+    ctx.save();
+    roundedPath(frame.x + 1.5, frame.y + 1.5, frame.w - 3, frame.h - 3, 16);
+    ctx.strokeStyle = "rgba(255,215,190,.28)";
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawTable() {    ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = "#121914";
     ctx.fillRect(0, 0, W, H);
 
-    const wood = ctx.createLinearGradient(0, 0, 0, H);
-    wood.addColorStop(0, "#9b6333");
-    wood.addColorStop(.14, "#684020");
-    wood.addColorStop(.5, "#84502a");
-    wood.addColorStop(.88, "#61391f");
-    wood.addColorStop(1, "#a16b39");
     const frame = tableIsSnooker
       ? { x: TABLE.left - 30, y: TABLE.top - 30, w: TABLE.right - TABLE.left + 60, h: TABLE.bottom - TABLE.top + 60 }
-      : { x: 18, y: 18, w: 964, h: 554 };
+      : { x: TABLE.left - 55, y: TABLE.top - 55, w: TABLE.right - TABLE.left + 110, h: TABLE.bottom - TABLE.top + 110 };
+    const wood = ctx.createLinearGradient(0, frame.y, 0, frame.y + frame.h);
+    wood.addColorStop(0, "#d89d63");
+    wood.addColorStop(.18, "#b8743d");
+    wood.addColorStop(.5, "#c88a4a");
+    wood.addColorStop(.82, "#8a5129");
+    wood.addColorStop(1, "#d29553");
     roundedRect(frame.x, frame.y, frame.w, frame.h, 17, wood);
-    ctx.save();
-    roundedPath(frame.x + 4, frame.y + 4, frame.w - 8, frame.h - 8, 14);
-    ctx.clip();
-    for (let i = 0; i < 26; i += 1) {
-      const y = 24 + i * 21;
-      ctx.strokeStyle = i % 3 === 0 ? "rgba(246,192,115,.12)" : "rgba(45,23,11,.1)";
-      ctx.lineWidth = i % 3 === 0 ? 2 : 1;
-      ctx.beginPath();
-      ctx.moveTo(20, y);
-      ctx.bezierCurveTo(250, y - 10, 700, y + 10, 980, y - 3);
-      ctx.stroke();
-    }
-    ctx.restore();
-
-    if (!tableIsSnooker) roundedRect(43, 43, 914, 504, 15, "#33271c");
+    drawRailGrain(frame);
+    if (!tableIsSnooker) roundedRect(TABLE.left - 30, TABLE.top - 30, TABLE.right - TABLE.left + 60, TABLE.bottom - TABLE.top + 60, 15, "#33271c");
     const cushion = ctx.createLinearGradient(0, 46, 0, 76);
     cushion.addColorStop(0, "#214a32");
     cushion.addColorStop(.55, "#163e2b");
@@ -2123,7 +2344,7 @@
       roundedRect(TABLE.left - 20, TABLE.top - 20, TABLE.right - TABLE.left + 40, TABLE.bottom - TABLE.top + 40, 9, "#33271c");
       roundedRect(TABLE.left - 10, TABLE.top - 10, TABLE.right - TABLE.left + 20, TABLE.bottom - TABLE.top + 20, 6, cushion);
     } else {
-      roundedRect(58, 58, 884, 474, 11, cushion);
+      roundedRect(TABLE.left - 15, TABLE.top - 15, TABLE.right - TABLE.left + 30, TABLE.bottom - TABLE.top + 30, 11, cushion);
     }
     roundedRect(TABLE.left - 4, TABLE.top - 4, TABLE.right - TABLE.left + 8, TABLE.bottom - TABLE.top + 8, 8, tableIsSnooker ? snookerFelt : felt);
     if (tableIsSnooker) {
@@ -2166,14 +2387,18 @@
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = "rgba(240,236,185,.42)";
-    for (let i = 0; i < 5; i += 1) {
-      const x = 145 + i * 138;
-      ctx.beginPath(); ctx.arc(x, 63, 1.7, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.arc(x, 527, 1.7, 0, Math.PI * 2); ctx.fill();
+    // Three diamonds between each corner pocket and the middle pocket, evenly spaced.
+    for (let i = 1; i <= 3; i += 1) {
+      const nearX = pockets[0].x + (pockets[1].x - pockets[0].x) * i / 4;
+      for (const x of [nearX, 2 * pockets[1].x - nearX]) {
+        ctx.beginPath(); ctx.arc(x, TABLE.top - 10, 1.7, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x, TABLE.bottom + 10, 1.7, 0, Math.PI * 2); ctx.fill();
+      }
     }
-    ctx.beginPath(); ctx.arc(BAULK_LINE_X, 295, 2.3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(BAULK_LINE_X, H / 2, 2.3, 0, Math.PI * 2); ctx.fill();
     }
 
+    drawPocketPlates();
     drawPockets();
     const canAim = !gameOver && cueBall.active && !moving && !draggedBall && !ballInHand;
     if (canAim && aimGuideOn) drawAimGuide({ x: Math.cos(aimAngle), y: Math.sin(aimAngle) });
@@ -2201,6 +2426,64 @@
     }
     if (canAim) drawCue();
     if (mode === "trick" && !moving) drawTrickHint();
+  }
+
+  // Polished brass plates around each pocket, kept off the playing cloth.
+  function drawPocketPlates() {
+    const margin = tableIsSnooker ? 30 : 55;
+    const frame = { x: TABLE.left - margin, y: TABLE.top - margin, w: TABLE.right - TABLE.left + margin * 2, h: TABLE.bottom - TABLE.top + margin * 2 };
+    const cornerReach = tableIsSnooker ? 27 : 34;
+    const middleReach = tableIsSnooker ? 23 : 30;
+    const middleHalf = tableIsSnooker ? 32 : 40;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, W, H);
+    ctx.rect(TABLE.left - 4, TABLE.top - 4, TABLE.right - TABLE.left + 8, TABLE.bottom - TABLE.top + 8);
+    ctx.clip("evenodd");
+    pockets.forEach((pocket, index) => {
+      const middle = index % 3 === 1;
+      const left = pocket.x < W / 2;
+      const top = pocket.y < H / 2;
+      let x0, x1;
+      let y0, y1;
+      if (middle) {
+        x0 = pocket.x - middleHalf;
+        x1 = pocket.x + middleHalf;
+      } else {
+        x0 = left ? frame.x : pocket.x - cornerReach;
+        x1 = left ? pocket.x + cornerReach : frame.x + frame.w;
+      }
+      const reach = middle ? middleReach : cornerReach;
+      y0 = top ? frame.y : pocket.y - reach;
+      y1 = top ? pocket.y + reach : frame.y + frame.h;
+      const gold = ctx.createLinearGradient(x0, y0, x1, y1);
+      gold.addColorStop(0, "#fff0b0");
+      gold.addColorStop(.28, "#e2b84e");
+      gold.addColorStop(.55, "#a97a22");
+      gold.addColorStop(.78, "#e9c566");
+      gold.addColorStop(1, "#8c6118");
+      ctx.shadowColor = "rgba(0,0,0,.5)";
+      ctx.shadowBlur = 8;
+      ctx.shadowOffsetY = 2;
+      ctx.fillStyle = gold;
+      roundedPath(x0, y0, x1 - x0, y1 - y0, middle ? 10 : 15);
+      ctx.fill();
+      ctx.shadowColor = "transparent";
+      ctx.strokeStyle = "rgba(70,42,8,.85)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255,247,205,.7)";
+      ctx.lineWidth = 1;
+      roundedPath(x0 + 2.5, y0 + 2.5, x1 - x0 - 5, y1 - y0 - 5, middle ? 8 : 13);
+      ctx.stroke();
+      const shine = ctx.createLinearGradient(x0, y0, x0 + (x1 - x0) * .6, y0 + (y1 - y0) * .6);
+      shine.addColorStop(0, "rgba(255,255,255,.55)");
+      shine.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = shine;
+      roundedPath(x0 + 3, y0 + 3, (x1 - x0) * .6, (y1 - y0) * .35, 9);
+      ctx.fill();
+    });
+    ctx.restore();
   }
 
   function drawPockets() {
@@ -2877,8 +3160,15 @@
     soundOn = !soundOn;
     event.currentTarget.classList.toggle("muted", !soundOn);
     event.currentTarget.setAttribute("aria-label", soundOn ? "Mute sound" : "Enable sound");
+    event.currentTarget.setAttribute("aria-pressed", String(soundOn));
+    event.currentTarget.title = soundOn ? "Sound on" : "Sound off";
     if (soundOn && audioContext?.state === "suspended") audioContext.resume();
   });
+
+  // Browsers block audio until the first user gesture, so resume then.
+  window.addEventListener("pointerdown", () => {
+    if (soundOn && audioContext?.state === "suspended") audioContext.resume();
+  }, { passive: true });
 
   resetGame();
   requestAnimationFrame(frame);

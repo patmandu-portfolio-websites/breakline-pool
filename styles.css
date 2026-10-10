@@ -40,7 +40,11 @@ button { color: inherit; }
 .live-dot, .status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 100%; background: var(--lime); box-shadow: 0 0 12px rgba(201, 243, 106, .65); }
 .icon-button { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; background: transparent; cursor: pointer; }
 .icon-button svg, .reset-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-.icon-button.muted { color: #68776d; }
+.icon-button { color: var(--lime); border-color: rgba(201, 243, 106, .55); background: rgba(201, 243, 106, .1); box-shadow: 0 0 12px rgba(201, 243, 106, .3); }
+.icon-button.muted { color: #68776d; border-color: var(--line); background: transparent; box-shadow: none; }
+.sound-slash { display: none; }
+.icon-button.muted .sound-slash { display: inline; }
+.icon-button.muted .sound-waves { display: none; }
 
 .intro { display: flex; align-items: end; justify-content: space-between; padding: 45px 0 29px; }
 .eyebrow { margin: 0 0 10px; color: var(--lime); font-size: 9px; letter-spacing: .16em; }
