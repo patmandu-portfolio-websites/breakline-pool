@@ -1566,14 +1566,15 @@
 
       const approaches = findCueApproaches(ghost, objectDirection, objectBalls);
       for (const approach of approaches) {
-        const bankPenalty = (approach.banks || 0) * 28;
-        const cutPenalty = Math.max(0, 1 - Math.max(0, approach.approach)) * 180;
-        const forgiveness = approach.approach > .92 ? -65 : 0;
+        const bankPenalty = (approach.banks || 0) * 22;
+        const cutPenalty = Math.max(0, 0.9 - Math.max(0, approach.approach)) * 120;
+        const directBonus = Math.max(0, approach.approach - 0.82) * 95;
+        const bankBonus = (approach.banks || 0) > 1 ? -8 * (approach.banks - 1) : 0;
         candidates.push({
           angle: approach.angle,
-          distance: approach.cueDistance + objectDistance * .35 + (1 - approach.approach) * 165
-            + pocketMiss * 4 + 90 / (objectClearance + 5) + 60 / (approach.clearance + 5)
-            + bankPenalty + cutPenalty + forgiveness,
+          distance: approach.cueDistance + objectDistance * .33 + (1 - approach.approach) * 135
+            + pocketMiss * 4 + 85 / (objectClearance + 5) + 55 / (approach.clearance + 5)
+            + bankPenalty + cutPenalty + bankBonus - directBonus,
           approach: approach.approach,
           cueDistance: approach.cueDistance,
           objectDistance,
@@ -1726,16 +1727,18 @@
     let ranked = [];
     for (const target of targets) ranked = ranked.concat(aiShotCandidates(target));
     ranked.sort((a, b) => a.distance - b.distance);
-    for (const shot of ranked.slice(0, aiDifficulty >= 4 ? 30 : expert ? 12 : 6)) {
+    for (const shot of ranked.slice(0, aiDifficulty >= 4 ? 36 : expert ? 14 : 7)) {
       const power = aiPowerFor(shot);
       addAttempt(shot.angle, power);
       if (expert) {
-        addAttempt(shot.angle, power * .9);
-        addAttempt(shot.angle, power * 1.08);
+        addAttempt(shot.angle, power * .86);
+        addAttempt(shot.angle, power * 1.1);
       }
       if (aiDifficulty >= 4) {
-        addAttempt(shot.angle + 0.4 * degrees, power * .98);
-        addAttempt(shot.angle - 0.4 * degrees, power * .98);
+        addAttempt(shot.angle + 0.28 * degrees, power * .96);
+        addAttempt(shot.angle - 0.28 * degrees, power * .96);
+        addAttempt(shot.angle + 0.56 * degrees, power * .98);
+        addAttempt(shot.angle - 0.56 * degrees, power * .98);
       }
     }
     for (const target of targets) {
@@ -2287,8 +2290,8 @@
       const across = band.horizontal ? band.h : band.w;
       for (let offset = 1; offset < across; offset += 1.4 + rand() * 2.2) {
         const dark = rand() > .35;
-        ctx.strokeStyle = dark ? `rgba(28,6,4,${.16 + rand() * .22})` : `rgba(205,110,85,${.05 + rand() * .09})`;
-        ctx.lineWidth = .5 + rand() * 1.1;
+        ctx.strokeStyle = dark ? `rgba(70,32,14,${.12 + rand() * .18})` : `rgba(235,160,95,${.08 + rand() * .12})`;
+        ctx.lineWidth = dark ? .5 + rand() * 1.1 : 1.1 + rand() * 1.5;
         const drift = (rand() - .5) * 3;
         ctx.beginPath();
         for (let step = 0; step <= 8; step += 1) {
@@ -2303,7 +2306,7 @@
       const a = band.horizontal ? band.y : band.x;
       const size = band.horizontal ? band.h : band.w;
       const from = outerFirst ? a : a + size;
-      const to = outerFirst ? a + size * .45 : a + size * .55;
+      const to = outerFirst ? a + size * .6 : a + size * .4;
       const shine = band.horizontal ? ctx.createLinearGradient(0, from, 0, to) : ctx.createLinearGradient(from, 0, to, 0);
       shine.addColorStop(0, tableIsSnooker ? "rgba(255,225,205,.34)" : "rgba(255,225,205,.42)");
       shine.addColorStop(.5, tableIsSnooker ? "rgba(255,225,205,.08)" : "rgba(255,225,205,.1)");
@@ -2328,11 +2331,11 @@
       ? { x: TABLE.left - 30, y: TABLE.top - 30, w: TABLE.right - TABLE.left + 60, h: TABLE.bottom - TABLE.top + 60 }
       : { x: TABLE.left - 55, y: TABLE.top - 55, w: TABLE.right - TABLE.left + 110, h: TABLE.bottom - TABLE.top + 110 };
     const wood = ctx.createLinearGradient(0, frame.y, 0, frame.y + frame.h);
-    wood.addColorStop(0, "#d89d63");
-    wood.addColorStop(.18, "#b8743d");
-    wood.addColorStop(.5, "#c88a4a");
-    wood.addColorStop(.82, "#8a5129");
-    wood.addColorStop(1, "#d29553");
+    wood.addColorStop(0, "#96562a");
+    wood.addColorStop(.18, "#7f3f1e");
+    wood.addColorStop(.5, "#8a4a23");
+    wood.addColorStop(.82, "#562812");
+    wood.addColorStop(1, "#8f4e24");
     roundedRect(frame.x, frame.y, frame.w, frame.h, 17, wood);
     drawRailGrain(frame);
     if (!tableIsSnooker) roundedRect(TABLE.left - 30, TABLE.top - 30, TABLE.right - TABLE.left + 60, TABLE.bottom - TABLE.top + 60, 15, "#33271c");
@@ -2571,10 +2574,11 @@
   function drawBall(ball) {
     const { x, y, number } = ball;
     ctx.save();
+    const smallShadow = isSnooker() && window.innerWidth > 900;
     ctx.shadowColor = "rgba(0,0,0,.56)";
-    ctx.shadowBlur = 6;
-    ctx.shadowOffsetX = 3;
-    ctx.shadowOffsetY = 5;
+    ctx.shadowBlur = smallShadow ? 4 : 6;
+    ctx.shadowOffsetX = smallShadow ? 1.5 : 3;
+    ctx.shadowOffsetY = smallShadow ? 2.5 : 5;
     ctx.fillStyle = "#e7e9dc";
     ctx.beginPath();
     ctx.arc(x, y, BALL_R, 0, Math.PI * 2);
